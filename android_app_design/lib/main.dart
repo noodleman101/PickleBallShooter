@@ -4,7 +4,7 @@ void main() {
   runApp(MyApp());
 }
 
-enum AppMode { grid, custom, random }
+enum AppMode { grid, custom, random, debug }
 
 class Settings {
   final String id;
@@ -53,6 +53,77 @@ class MainControllerPage extends StatefulWidget {
 class _MainControllerPageState extends State<MainControllerPage> {
   // ---------------- MODE ----------------
   AppMode currentMode = AppMode.grid;
+  
+    // ---------------- DRAG SELECTION ----------------
+  bool isDragging = false;
+  Set<String> dragVisited = {};
+
+  Offset? dragStart;
+bool eraseMode = false;
+
+// Dot colors for Grid mode
+final Color gridSelectedColor = const Color.fromARGB(255, 55, 215, 37);
+final Color gridUnselectedColor = Colors.white70;
+
+// Dot colors for Random mode
+final Color randomSelectedColor = const Color.fromARGB(255, 229, 25, 25);
+final Color randomUnselectedColor = Colors.white54;
+
+bool isConnected = false; // default state
+bool debugMode = false; // tracks if debug is active
+bool clearGridActive = false; 
+bool randomClearActive = false; 
+
+  // ---------------- CONNECTION BUTTON ----------------
+  Widget _buildConnectionButton() {
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          isConnected = !isConnected;
+        });
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+        decoration: BoxDecoration(
+          color: isConnected ? Colors.green : Colors.red,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Text(
+          isConnected ? "Connected" : "Disconnected",
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDebugButton() {
+  return GestureDetector(
+    onTap: () {
+      setState(() {
+        currentMode = AppMode.debug;
+      });
+    },
+    child: Container(
+      padding: EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+      decoration: BoxDecoration(
+        color: currentMode == AppMode.debug ? const Color.fromARGB(255, 219, 144, 15) : Colors.grey[700], // active color
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        "Debug",
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.bold,
+          fontSize: 18,
+        ),
+      ),
+    ),
+  );
+}
 
   // ---------------- GRID MODE ----------------
   static const int topGridSize = 5;
@@ -103,25 +174,47 @@ class _MainControllerPageState extends State<MainControllerPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.grey[900],
-      appBar: AppBar(
-        title: const SizedBox.shrink(),
-        backgroundColor: Colors.black,
-      ),
-      body: Column(
-        children: [
-          SizedBox(height: 8),
-          _buildModeSelector(),
-          SizedBox(height: 8),
-          Expanded(child: _buildModeContent()),
-          _buildStartStop(),
-        ],
-      ),
+appBar: PreferredSize(
+  preferredSize: Size.fromHeight(30), // smaller than default 56
+  child: AppBar(
+    title: const SizedBox.shrink(),
+    backgroundColor: Colors.grey[900],
+    elevation: 0, // optional, removes shadow
+  ),
+),
+body: Stack(
+  children: [
+    // Main content in a Column
+    Column(
+      children: [
+        Row(
+          children: [
+            SizedBox(width: 14),
+            _buildConnectionButton(),
+          ],
+        ),
+        SizedBox(height: 16),
+        _buildModeSelector(),
+        SizedBox(height: 8),
+        Expanded(child: _buildModeContent()),
+        _buildStartStop(),
+      ],
+    ),
+
+    // Debug button in top-right
+    Positioned(
+      top: 3,
+      right: 14,
+      child: _buildDebugButton(),
+    ),
+  ],
+),
     );
   }
 
   // ---------------- MODE SELECTOR ----------------
   Widget _buildModeSelector() {
-    Widget button(String text, AppMode mode) {
+    Widget button(String text, AppMode mode, {double fontSize = 18}) {
       bool active = currentMode == mode;
       return Expanded(
         child: Container(
@@ -138,7 +231,7 @@ class _MainControllerPageState extends State<MainControllerPage> {
               child: Text(
                 text,
                 style: TextStyle(
-                    fontSize: 18,
+                    fontSize: 26,
                     color: active ? Colors.white : Colors.white70,
                     fontWeight: FontWeight.bold),
               ),
@@ -151,9 +244,9 @@ class _MainControllerPageState extends State<MainControllerPage> {
     return Row(
       children: [
         SizedBox(width: 8),
-        button("Grid", AppMode.grid),
-        button("Custom", AppMode.custom),
-        button("Random", AppMode.random),
+        button("Grid", AppMode.grid,fontSize: 24),
+        button("Custom", AppMode.custom, fontSize: 20),
+        button("Random", AppMode.random, fontSize: 20),
         SizedBox(width: 8),
       ],
     );
@@ -168,28 +261,37 @@ class _MainControllerPageState extends State<MainControllerPage> {
         return _buildCustomMode();
       case AppMode.random:
         return _buildRandomMode();
+      case AppMode.debug:
+        return _buildDebugMode();
     }
   }
 
   // ---------------- GRID MODE ----------------
-  Widget _buildGridMode() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          SizedBox(height: 12),
-          _buildCourt(bottomGrid: bottomSelectionOrder, numbered: true),
-          SizedBox(height: 20),
-          _buildPatternButtons(),
-          SizedBox(height: 16),
-          _buildSpeedRow(),
-          SizedBox(height: 16),
-          _buildSpeedAdjustmentSlider(),
-          _buildFreqSlider(),
-          SizedBox(height: 20),
-        ],
-      ),
-    );
-  }
+Widget _buildGridMode() {
+  return SingleChildScrollView(
+    child: Column(
+      children: [
+        SizedBox(height: 12),
+
+        _buildCourt(
+          bottomGrid: bottomSelectionOrder,
+          numbered: true,
+        ),
+
+        SizedBox(height: 20),
+
+        _buildPatternButtons(), // this now contains the Clear button
+
+        SizedBox(height: 16),
+        _buildSpeedRow(),
+        SizedBox(height: 16),
+        _buildSpeedAdjustmentSlider(),
+        _buildFreqSlider(),
+        SizedBox(height: 20),
+      ],
+    ),
+  );
+}
 
   // ---------------- SPEED ADJUSTMENT SLIDER ----------------
 Widget _buildSpeedAdjustmentSlider() {
@@ -225,22 +327,44 @@ Widget _buildSpeedAdjustmentSlider() {
 }
 
   // ---------------- RANDOM MODE ----------------
-  Widget _buildRandomMode() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          SizedBox(height: 12),
-          _buildCourt(bottomGrid: randomBottomSelection, numbered: false),
-          SizedBox(height: 20),
-          _buildSpeedRow(),
-          SizedBox(height: 16),
-          _buildSpeedAdjustmentSlider(),
-          _buildFreqSlider(),
-          SizedBox(height: 20),
-        ],
-      ),
-    );
-  }
+Widget _buildRandomMode() {
+  return SingleChildScrollView(
+    child: Column(
+      children: [
+        SizedBox(height: 12),
+
+        _buildCourt(bottomGrid: randomBottomSelection, numbered: false),
+
+        SizedBox(height: 12),
+
+_selectButton(
+  "Clear Grid",
+  randomClearActive,
+  () {
+    setState(() {
+      randomBottomSelection.clear(); // clear random grid
+      randomClearActive = true;      // activate the highlight
+    });
+
+    Future.delayed(Duration(milliseconds: 150), () {
+      setState(() {
+        randomClearActive = false;  // reset after short delay
+      });
+    });
+  },
+  activeColor: Colors.redAccent,
+),
+
+        SizedBox(height: 20),
+        _buildSpeedRow(),
+        SizedBox(height: 16),
+        _buildSpeedAdjustmentSlider(),
+        _buildFreqSlider(),
+        SizedBox(height: 20),
+      ],
+    ),
+  );
+}
 
   // ---------------- CUSTOM MODE ----------------
   Widget _buildCustomMode() {
@@ -276,7 +400,7 @@ Widget _buildSpeedAdjustmentSlider() {
                 SizedBox(width: 12),
                 _selectButton("Test Shot", testShotActive, () {
                   setState(() => testShotActive = true);
-                  Future.delayed(Duration(milliseconds: 300),
+                  Future.delayed(Duration(milliseconds: 150),
                       () => setState(() => testShotActive = false));
                 }, activeColor: Colors.pinkAccent),
               ],
@@ -504,8 +628,8 @@ Widget _buildSpeedAdjustmentSlider() {
                   height: hit,
                   alignment: Alignment.center,
                   child: Container(
-                    width:24,
-                    height: 24,
+                    width:32,
+                    height: 32,
                     decoration: BoxDecoration(
                         shape: BoxShape.circle, color: Colors.white70),
                   ),
@@ -521,78 +645,326 @@ Widget _buildSpeedAdjustmentSlider() {
     );
   }
 
-  Widget _buildBottomGrid(BoxConstraints c, double pad, double hit, double kitchen,
-      List<String> bottomGrid, bool numbered) {
-    final usableH = c.maxHeight / 2 - kitchen - pad * 2;
-    final usableW = c.maxWidth - pad * 2;
+Widget selectedDotsDisplay(List<String> dots) {
+  if (dots.isEmpty) {
+    return Text(
+      "None",
+      style: TextStyle(color: Colors.white70, fontSize: 16),
+    );
+  }
 
-    return Stack(
+  return Wrap(
+    spacing: 6,
+    runSpacing: 4,
+    children: dots.map((dot) {
+      return Container(
+        padding: EdgeInsets.symmetric(vertical: 4, horizontal: 6),
+        decoration: BoxDecoration(
+          color: Colors.grey[700],
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          dot,
+          style: TextStyle(color: Colors.white, fontSize: 14),
+        ),
+      );
+    }).toList(),
+  );
+}
+
+  // ---------------- DEBUG MODE ----------------
+Widget _buildDebugMode() {
+  return SingleChildScrollView(
+    padding: EdgeInsets.all(16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+
+        SizedBox(height: 16),
+
+        // ---------------- GRID MODE ----------------
+        Text(
+          "GRID MODE",
+          style: TextStyle(color: Colors.lightBlueAccent, fontSize: 22, fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 8),
+        Text("Top Grid Selected Position:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("Row: $topRow, Col: $topCol", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Bottom Grid Selected Dots (Order):", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        selectedDotsDisplay(bottomSelectionOrder),
+        SizedBox(height: 4),
+        Text("Pattern Selected:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(pattern, style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Speed:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(speedPattern, style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Speed Adjustment:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${speedAdjustment.toInt()}%", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Frequency:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${freq.toInt()}s", style: TextStyle(color: Colors.white70, fontSize: 16)),
+
+        SizedBox(height: 20),
+
+                // ---------------- CUSTOM MODE ----------------
+        Text(
+          "CUSTOM MODE",
+          style: TextStyle(color: Colors.orangeAccent, fontSize: 22, fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 8),
+        Text("Selected Mode:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(currentCustom.name, style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Speed:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${currentCustom.speed.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Turret:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${currentCustom.turret.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Cowl:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${currentCustom.cowl.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Spin:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${currentCustom.spin.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Frequency:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${currentCustom.freq.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
+
+       SizedBox(height: 20),
+
+        // ---------------- RANDOM MODE ----------------
+        Text(
+          "RANDOM MODE",
+          style: TextStyle(color: Colors.redAccent, fontSize: 22, fontWeight: FontWeight.bold),
+        ),
+        SizedBox(height: 8),
+        Text("Top Grid Selected Position:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("Row: $topRow, Col: $topCol", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Bottom Grid Selected Dots (Order):", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        selectedDotsDisplay(randomBottomSelection),
+        SizedBox(height: 4),
+        Text("Speed:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text(speedPattern, style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Speed Adjustment:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${speedAdjustment.toInt()}%", style: TextStyle(color: Colors.white70, fontSize: 16)),
+        SizedBox(height: 4),
+        Text("Frequency:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+        Text("${freq.toInt()}s", style: TextStyle(color: Colors.white70, fontSize: 16)),
+
+        SizedBox(height: 20),
+      ],
+    ),
+  );
+}
+
+Widget _buildBottomGrid(
+  BoxConstraints c,
+  double pad,
+  double hit,
+  double kitchen,
+  List<String> bottomGrid,
+  bool numbered,
+) {
+  final usableH = c.maxHeight / 2 - kitchen - pad * 2;
+  final usableW = c.maxWidth - pad * 2;
+
+  return GestureDetector(
+    behavior: HitTestBehavior.opaque,
+
+onPanStart: (details) {
+  dragVisited.clear();
+  dragStart = details.localPosition;
+},
+
+onPanUpdate: (details) {
+  final local = details.localPosition;
+
+  // Decide erase vs add based on drag direction
+  if (dragStart != null) {
+    final delta = local - dragStart!;
+    eraseMode = delta.dy < 0; // dragging up = erase
+  }
+
+  final col =
+      ((local.dx - pad) / (usableW / (bottomGridSizeColumns - 1))).round();
+  final row =
+      ((local.dy - pad - kitchen) / (usableH / (bottomGridSizeRows - 1)))
+          .round();
+
+  if (row < 0 ||
+      row >= bottomGridSizeRows ||
+      col < 0 ||
+      col >= bottomGridSizeColumns) return;
+
+  final key = "$row,$col";
+
+  if (!dragVisited.contains(key)) {
+    dragVisited.add(key);
+    setState(() {
+      if (eraseMode) {
+        bottomGrid.remove(key);
+      } else {
+        if (!bottomGrid.contains(key)) bottomGrid.add(key);
+      }
+    });
+  }
+},
+
+onPanEnd: (_) {
+  dragVisited.clear();
+  dragStart = null;
+  eraseMode = false;
+},
+
+    child: Stack(
       children: [
         for (int r = 0; r < bottomGridSizeRows; r++)
           for (int col = 0; col < bottomGridSizeColumns; col++)
-            _buildBottomCell(r, col, usableW, usableH, pad, hit, kitchen,
-                bottomGrid, numbered),
+            _buildBottomCell(
+              r,
+              col,
+              usableW,
+              usableH,
+              pad,
+              hit,
+              kitchen,
+              bottomGrid,
+              numbered,
+            ),
       ],
-    );
+    ),
+  );
+}
+
+Widget _buildBottomCell(
+    int r,
+    int c,
+    double w,
+    double h,
+    double pad,
+    double hit,
+    double kitchen,
+    List<String> bottomGrid,
+    bool numbered,
+) {
+  final key = "$r,$c";
+  final index = bottomGrid.indexOf(key);
+  final isSelected = index >= 0;
+
+  // ----------------- Colors based on mode -----------------
+  Color selectedColor;
+  Color unselectedColor;
+
+  if (currentMode == AppMode.grid) {
+    selectedColor = gridSelectedColor;    // e.g., Colors.redAccent
+    unselectedColor = gridUnselectedColor; // e.g., Colors.white70
+  } else if (currentMode == AppMode.random) {
+    selectedColor = randomSelectedColor;    // e.g., Colors.greenAccent
+    unselectedColor = randomUnselectedColor; // e.g., Colors.white54
+  } else {
+    selectedColor = Colors.redAccent;
+    unselectedColor = Colors.white70;
   }
 
-  Widget _buildBottomCell(int r, int c, double w, double h, double pad, double hit,
-      double kitchen, List<String> bottomGrid, bool numbered) {
-    final key = "$r,$c";
-    final index = bottomGrid.indexOf(key);
-    final isSelected = index >= 0;
-
-    return Positioned(
-      left: pad + c * (w / (bottomGridSizeColumns - 1)) - hit / 2,
-      top: pad + kitchen + r * (h / (bottomGridSizeRows - 1)) - hit / 2,
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            if (bottomGrid.contains(key))
-              bottomGrid.remove(key);
-            else
-              bottomGrid.add(key);
-          });
-        },
+  // ----------------- Return cell -----------------
+  return Positioned(
+    left: pad + c * (w / (bottomGridSizeColumns - 1)) - hit / 2,
+    top: pad + kitchen + r * (h / (bottomGridSizeRows - 1)) - hit / 2,
+    child: GestureDetector(
+      onTap: () {
+        setState(() {
+          if (bottomGrid.contains(key))
+            bottomGrid.remove(key);
+          else
+            bottomGrid.add(key);
+        });
+      },
+      child: Container(
+        width: hit,
+        height: hit,
+        alignment: Alignment.center,
         child: Container(
-          width: hit,
-          height: hit,
+          width: 30,
+          height: 30,
           alignment: Alignment.center,
-          child: Container(
-            width: 28,
-            height: 28,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isSelected ? Colors.redAccent : Colors.white70,
-            ),
-            child: (numbered && isSelected)
-                ? Text(
-                    "${index + 1}",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold),
-                  )
-                : null,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isSelected ? selectedColor : unselectedColor, // <-- USE HERE
           ),
+          child: (numbered && isSelected)
+              ? Text(
+                  "${index + 1}",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold),
+                )
+              : null,
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ---------------- PATTERN / SPEED / FREQ ----------------
-  Widget _buildPatternButtons() {
-    return Column(
-      children: [
-        _selectButton("1-8,8-1", pattern == "1-8,8-1",
-            () => setState(() => pattern = "1-8,8-1")),
-        SizedBox(height: 8),
-        _selectButton("1-8,1-8", pattern == "1-8,1-8",
-            () => setState(() => pattern = "1-8,1-8")),
-      ],
-    );
-  }
+Widget _buildPatternButtons() {
+  return Column(
+    children: [
+      Container(
+        width: double.infinity, // ensure full width
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            // Centered 1-8 button
+            _selectButton(
+              "1-8,8-1",
+              pattern == "1-8,8-1",
+              () => setState(() => pattern = "1-8,8-1"),
+            ),
+
+            // Clear button on the right
+Positioned(
+  right: 70,
+  child: _selectButton(
+    "Clear Grid",
+    clearGridActive, // <-- use this variable instead of false
+    () {
+      setState(() {
+        bottomSelectionOrder.clear(); // clear the grid
+        clearGridActive = true;       // trigger highlight
+      });
+
+      // Reset the highlight after 300 milliseconds
+      Future.delayed(Duration(milliseconds: 150), () {
+        setState(() {
+          clearGridActive = false;
+        });
+      });
+    },
+    activeColor: Colors.redAccent,
+    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    fontSize: 14,
+  ),
+),
+          ],
+        ),
+      ),
+
+      SizedBox(height: 8),
+
+      // Second pattern button stays below
+      _selectButton(
+        "1-8,1-8",
+        pattern == "1-8,1-8",
+        () => setState(() => pattern = "1-8,1-8"),
+      ),
+    ],
+  );
+}
 
   Widget _buildSpeedRow() {
     return Padding(
