@@ -142,7 +142,7 @@ bool randomClearActive = false;
   double freq = 7;
 
    // ---------- NEW SPEED ADJUSTMENT ----------
-  double speedAdjustment = 0;
+  double speedAdjustment = 1;
 
   // ---------------- CUSTOM MODE ----------------
   final Settings newModeTemplate = Settings(
@@ -304,15 +304,15 @@ Widget _buildSpeedAdjustmentSlider() {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          "Speed adjustment (%): ${speedAdjustment.toInt()}",
+          "Speed adjustment : ${speedAdjustment.toInt()}",
           style: TextStyle(color: Colors.white, fontSize: 18),
         ),
         Slider(
           activeColor: Colors.lightBlueAccent,
           inactiveColor: Colors.grey,
-          min: -20,
-          max: 20,
-          divisions: 40,
+          min: 1,
+          max: 4,
+          divisions: 3,
           value: speedAdjustment,
           onChanged: (double value) {
             setState(() {
