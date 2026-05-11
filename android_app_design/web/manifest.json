@@ -1,6 +1,6 @@
 {
-    "name": "android_app_design",
-    "short_name": "android_app_design",
+    "name": "test2app",
+    "short_name": "test2app",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
