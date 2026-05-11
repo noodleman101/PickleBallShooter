@@ -4,7 +4,9 @@ void main() {
   runApp(MyApp());
 }
 
-enum AppMode { grid, custom, random, debug }
+enum AppMode { grid, custom, random, seq, debug }
+enum SequenceDirection { topToBottom, bottomToTop }
+enum TimingMode { perShot, global }
 
 class Settings {
   final String id;
@@ -51,37 +53,109 @@ class MainControllerPage extends StatefulWidget {
 }
 
 class _MainControllerPageState extends State<MainControllerPage> {
-  // ---------------- MODE ----------------
+  // ── MODE ──────────────────────────────────────────────────────────
   AppMode currentMode = AppMode.grid;
-  
-    // ---------------- DRAG SELECTION ----------------
-  bool isDragging = false;
-  Set<String> dragVisited = {};
 
-  Offset? dragStart;
-bool eraseMode = false;
+  // ── COLORS ────────────────────────────────────────────────────────
+  final Color gridSelectedColor     = const Color.fromARGB(255, 55, 215, 37);
+  final Color gridUnselectedColor   = Colors.white70;
+  final Color randomSelectedColor   = const Color.fromARGB(255, 229, 25, 25);
+  final Color randomUnselectedColor = Colors.white54;
 
-// Dot colors for Grid mode
-final Color gridSelectedColor = const Color.fromARGB(255, 55, 215, 37);
-final Color gridUnselectedColor = Colors.white70;
+  // ── STATUS ────────────────────────────────────────────────────────
+  bool isConnected = false;
+  bool isRunning   = false;
 
-// Dot colors for Random mode
-final Color randomSelectedColor = const Color.fromARGB(255, 229, 25, 25);
-final Color randomUnselectedColor = Colors.white54;
+  // ── FLASH STATES ──────────────────────────────────────────────────
+  bool clearGridActive   = false;
+  bool randomClearActive = false;
+  bool testShotActive    = false;
 
-bool isConnected = false; // default state
-bool debugMode = false; // tracks if debug is active
-bool clearGridActive = false; 
-bool randomClearActive = false; 
+  bool speedUnlocked = false;
 
-  // ---------------- CONNECTION BUTTON ----------------
+  // ── GRID MODE ─────────────────────────────────────────────────────
+  static const int topGridSize           = 5;
+  static const int bottomGridSizeColumns = 7;
+  static const int bottomGridSizeRows    = 5;
+  int topRow = 2, topCol = 2;
+  List<String> bottomSelectionOrder = [];
+
+  // ── RANDOM MODE ───────────────────────────────────────────────────
+  List<String> randomBottomSelection = [];
+
+  // ── SHARED GRID SETTINGS (Grid & Random) ─────────────────────────
+  String pattern      = "1-8,8-1";
+  String speedPattern = "Medium";
+  double freq             = 7;
+  double speedAdjustment  = 1;
+
+  // ── DRAG SELECT (improved) ────────────────────────────────────────
+  // _dragErasing is determined by the FIRST dot touched, not drag direction.
+  // null = not dragging, true = erasing stroke, false = adding stroke
+  bool?       _dragErasing;
+  Set<String> _dragVisited = {};
+
+  // ── CUSTOM MODE ───────────────────────────────────────────────────
+  final Settings _newTemplate = Settings(
+    id: "new_mode", name: "New mode",
+    speed: 10, turret: 0, cowl: 0, spin: 0, freq: 7,
+  );
+  late Settings       currentCustom;
+  late List<Settings> savedSettings; // shared with Seq tab
+
+  // ── SEQUENCE (Seq tab) ────────────────────────────────────────────
+  List<Settings>    sequenceList      = [];
+  SequenceDirection sequenceDirection = SequenceDirection.topToBottom;
+  TimingMode        timingMode        = TimingMode.perShot;
+  double            globalFreq        = 7;
+
+  @override
+  void initState() {
+    super.initState();
+    savedSettings = [_newTemplate];
+    currentCustom = _newTemplate;
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // BUILD
+  // ════════════════════════════════════════════════════════════════════
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.grey[900],
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(30),
+        child: AppBar(
+          backgroundColor: Colors.grey[900],
+          elevation: 0,
+          title: const SizedBox.shrink(),
+        ),
+      ),
+      body: Stack(
+        children: [
+          Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 14),
+                child: Row(children: [_buildConnectionButton()]),
+              ),
+              SizedBox(height: 12),
+              _buildModeSelector(),
+              SizedBox(height: 8),
+              Expanded(child: _buildModeContent()),
+              _buildStartStop(),
+            ],
+          ),
+          Positioned(top: 3, right: 14, child: _buildDebugButton()),
+        ],
+      ),
+    );
+  }
+
+  // ── CONNECTION ────────────────────────────────────────────────────
   Widget _buildConnectionButton() {
     return GestureDetector(
-      onTap: () {
-        setState(() {
-          isConnected = !isConnected;
-        });
-      },
+      onTap: () => setState(() => isConnected = !isConnected),
       child: Container(
         padding: EdgeInsets.symmetric(vertical: 6, horizontal: 10),
         decoration: BoxDecoration(
@@ -90,283 +164,133 @@ bool randomClearActive = false;
         ),
         child: Text(
           isConnected ? "Connected" : "Disconnected",
-          style: TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            fontSize: 16,
-          ),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
         ),
       ),
     );
   }
 
+  // ── DEBUG BUTTON ──────────────────────────────────────────────────
   Widget _buildDebugButton() {
-  return GestureDetector(
-    onTap: () {
-      setState(() {
-        currentMode = AppMode.debug;
-      });
-    },
-    child: Container(
-      padding: EdgeInsets.symmetric(vertical: 4, horizontal: 10),
-      decoration: BoxDecoration(
-        color: currentMode == AppMode.debug ? const Color.fromARGB(255, 219, 144, 15) : Colors.grey[700], // active color
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(
-        "Debug",
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.bold,
-          fontSize: 18,
+    return GestureDetector(
+      onTap: () => setState(() => currentMode = AppMode.debug),
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: 4, horizontal: 10),
+        decoration: BoxDecoration(
+          color: currentMode == AppMode.debug
+              ? const Color.fromARGB(255, 219, 144, 15)
+              : Colors.grey[700],
+          borderRadius: BorderRadius.circular(8),
         ),
+        child: Text("Debug",
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
       ),
-    ),
-  );
-}
-
-  // ---------------- GRID MODE ----------------
-  static const int topGridSize = 5;
-  static const int bottomGridSizeColumns = 7;
-  static const int bottomGridSizeRows = 5;
-  int topRow = 2, topCol = 2;
-  List<String> bottomSelectionOrder = [];
-
-  // ---------------- RANDOM MODE ----------------
-  List<String> randomBottomSelection = [];
-
-
-  // Pattern / speed / frequency
-  String pattern = "1-8,8-1";
-  String speedPattern = "Medium";
-  double freq = 7;
-
-   // ---------- NEW SPEED ADJUSTMENT ----------
-  double speedAdjustment = 1;
-
-  // ---------------- CUSTOM MODE ----------------
-  final Settings newModeTemplate = Settings(
-      id: "new_mode",
-      name: "New mode",
-      speed: 10,
-      turret: 0,
-      cowl: 0,
-      spin: 0,
-      freq: 7);
-
-  late Settings currentCustom;
-  late List<Settings> savedSettings;
-
-  // ---------------- START/STOP ----------------
-  bool isRunning = false;
-
-  // Test shot
-  bool testShotActive = false;
-
-  @override
-  void initState() {
-    super.initState();
-    savedSettings = [newModeTemplate];
-    currentCustom = newModeTemplate;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.grey[900],
-appBar: PreferredSize(
-  preferredSize: Size.fromHeight(30), // smaller than default 56
-  child: AppBar(
-    title: const SizedBox.shrink(),
-    backgroundColor: Colors.grey[900],
-    elevation: 0, // optional, removes shadow
-  ),
-),
-body: Stack(
-  children: [
-    // Main content in a Column
-    Column(
-      children: [
-        Row(
-          children: [
-            SizedBox(width: 14),
-            _buildConnectionButton(),
-          ],
-        ),
-        SizedBox(height: 16),
-        _buildModeSelector(),
-        SizedBox(height: 8),
-        Expanded(child: _buildModeContent()),
-        _buildStartStop(),
-      ],
-    ),
-
-    // Debug button in top-right
-    Positioned(
-      top: 3,
-      right: 14,
-      child: _buildDebugButton(),
-    ),
-  ],
-),
     );
   }
 
-  // ---------------- MODE SELECTOR ----------------
+  // ════════════════════════════════════════════════════════════════════
+  // MODE SELECTOR  Grid | Custom | Random | Seq
+  // ════════════════════════════════════════════════════════════════════
   Widget _buildModeSelector() {
-    Widget button(String text, AppMode mode, {double fontSize = 18}) {
-      bool active = currentMode == mode;
+    Widget btn(String text, AppMode mode) {
+      final active = currentMode == mode;
       return Expanded(
-        child: Container(
-          margin: EdgeInsets.symmetric(horizontal: 6),
-          child: GestureDetector(
-            onTap: () => setState(() => currentMode = mode),
-            child: Container(
-              height: 48,
-              decoration: BoxDecoration(
-                color: active ? Colors.blueAccent : Colors.grey[700],
-                borderRadius: BorderRadius.circular(12),
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                text,
-                style: TextStyle(
-                    fontSize: 26,
-                    color: active ? Colors.white : Colors.white70,
-                    fontWeight: FontWeight.bold),
-              ),
+        child: GestureDetector(
+          onTap: () => setState(() => currentMode = mode),
+          child: Container(
+            margin: EdgeInsets.symmetric(horizontal: 5),
+            height: 46,
+            decoration: BoxDecoration(
+              color: active ? Colors.blueAccent : Colors.grey[700],
+              borderRadius: BorderRadius.circular(12),
             ),
+            alignment: Alignment.center,
+            child: Text(text,
+                style: TextStyle(
+                  fontSize: 22,
+                  color: active ? Colors.white : Colors.white70,
+                  fontWeight: FontWeight.bold,
+                )),
           ),
         ),
       );
     }
 
-    return Row(
-      children: [
-        SizedBox(width: 8),
-        button("Grid", AppMode.grid,fontSize: 24),
-        button("Custom", AppMode.custom, fontSize: 20),
-        button("Random", AppMode.random, fontSize: 20),
-        SizedBox(width: 8),
-      ],
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          btn("Grid",   AppMode.grid),
+          btn("Custom", AppMode.custom),
+          btn("Random", AppMode.random),
+          btn("Seq",    AppMode.seq),
+        ],
+      ),
     );
   }
 
-  // ---------------- MODE CONTENT ----------------
+  // ── ROUTER ────────────────────────────────────────────────────────
   Widget _buildModeContent() {
     switch (currentMode) {
-      case AppMode.grid:
-        return _buildGridMode();
-      case AppMode.custom:
-        return _buildCustomMode();
-      case AppMode.random:
-        return _buildRandomMode();
-      case AppMode.debug:
-        return _buildDebugMode();
+      case AppMode.grid:   return _buildGridMode();
+      case AppMode.custom: return _buildCustomMode();
+      case AppMode.random: return _buildRandomMode();
+      case AppMode.seq:    return _buildSeqMode();
+      case AppMode.debug:  return _buildDebugMode();
     }
   }
 
-  // ---------------- GRID MODE ----------------
-Widget _buildGridMode() {
-  return SingleChildScrollView(
-    child: Column(
-      children: [
-        SizedBox(height: 12),
+  // ════════════════════════════════════════════════════════════════════
+  // GRID MODE
+  // ════════════════════════════════════════════════════════════════════
+  Widget _buildGridMode() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          SizedBox(height: 12),
+          _buildCourt(bottomGrid: bottomSelectionOrder, numbered: true),
+          SizedBox(height: 16),
+          _buildPatternButtons(),
+          SizedBox(height: 14),
+          _buildSpeedRow(),
+          SizedBox(height: 14),
+          _buildSpeedAdjustmentSlider(),
+          _buildFreqSlider(),
+          SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
 
-        _buildCourt(
-          bottomGrid: bottomSelectionOrder,
-          numbered: true,
-        ),
+  // ════════════════════════════════════════════════════════════════════
+  // RANDOM MODE
+  // ════════════════════════════════════════════════════════════════════
+  Widget _buildRandomMode() {
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          SizedBox(height: 12),
+          _buildCourt(bottomGrid: randomBottomSelection, numbered: false),
+          SizedBox(height: 12),
+          _selectButton("Clear", randomClearActive, () {
+            setState(() { randomBottomSelection.clear(); randomClearActive = true; });
+            Future.delayed(Duration(milliseconds: 150),
+                () => setState(() => randomClearActive = false));
+          }, activeColor: Colors.redAccent),
+          SizedBox(height: 20),
+          _buildSpeedRow(),
+          SizedBox(height: 14),
+          _buildSpeedAdjustmentSlider(),
+          _buildFreqSlider(),
+          SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
 
-        SizedBox(height: 20),
-
-        _buildPatternButtons(), // this now contains the Clear button
-
-        SizedBox(height: 16),
-        _buildSpeedRow(),
-        SizedBox(height: 16),
-        _buildSpeedAdjustmentSlider(),
-        _buildFreqSlider(),
-        SizedBox(height: 20),
-      ],
-    ),
-  );
-}
-
-  // ---------------- SPEED ADJUSTMENT SLIDER ----------------
-Widget _buildSpeedAdjustmentSlider() {
-  // Make sure this variable exists in your state class:
-  // double speedAdjustment = 0;
-
-  return Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "Speed adjustment : ${speedAdjustment.toInt()}",
-          style: TextStyle(color: Colors.white, fontSize: 18),
-        ),
-        Slider(
-          activeColor: Colors.lightBlueAccent,
-          inactiveColor: Colors.grey,
-          min: 1,
-          max: 4,
-          divisions: 3,
-          value: speedAdjustment,
-          onChanged: (double value) {
-            setState(() {
-              speedAdjustment = value;
-            });
-          },
-        ),
-        SizedBox(height: 12), // spacing below the slider
-      ],
-    ),
-  );
-}
-
-  // ---------------- RANDOM MODE ----------------
-Widget _buildRandomMode() {
-  return SingleChildScrollView(
-    child: Column(
-      children: [
-        SizedBox(height: 12),
-
-        _buildCourt(bottomGrid: randomBottomSelection, numbered: false),
-
-        SizedBox(height: 12),
-
-_selectButton(
-  "Clear Grid",
-  randomClearActive,
-  () {
-    setState(() {
-      randomBottomSelection.clear(); // clear random grid
-      randomClearActive = true;      // activate the highlight
-    });
-
-    Future.delayed(Duration(milliseconds: 150), () {
-      setState(() {
-        randomClearActive = false;  // reset after short delay
-      });
-    });
-  },
-  activeColor: Colors.redAccent,
-),
-
-        SizedBox(height: 20),
-        _buildSpeedRow(),
-        SizedBox(height: 16),
-        _buildSpeedAdjustmentSlider(),
-        _buildFreqSlider(),
-        SizedBox(height: 20),
-      ],
-    ),
-  );
-}
-
-  // ---------------- CUSTOM MODE ----------------
+  // ════════════════════════════════════════════════════════════════════
+  // CUSTOM MODE — edit & save individual modes only
+  // ════════════════════════════════════════════════════════════════════
   Widget _buildCustomMode() {
     return SingleChildScrollView(
       child: Padding(
@@ -374,25 +298,21 @@ _selectButton(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text("Mode:", style: TextStyle(fontSize: 16, color: Colors.white)),
-            SizedBox(height: 8),
+            Text("Mode:",
+                style: TextStyle(fontSize: 15, color: Colors.white70, fontWeight: FontWeight.bold)),
+            SizedBox(height: 6),
             DropdownButton<Settings>(
               dropdownColor: Colors.grey[850],
               value: currentCustom,
-              items: savedSettings
-                  .map((s) => DropdownMenuItem(
-                        child: Text(s.name,
-                            style: TextStyle(color: Colors.white)),
-                        value: s,
-                      ))
-                  .toList(),
-              onChanged: (s) {
-                if (s != null) setState(() => currentCustom = s);
-              },
+              items: savedSettings.map((s) => DropdownMenuItem(
+                value: s,
+                child: Text(s.name, style: TextStyle(color: Colors.white)),
+              )).toList(),
+              onChanged: (s) { if (s != null) setState(() => currentCustom = s); },
             ),
-            SizedBox(height: 16),
-            _buildCustomSliders(),
             SizedBox(height: 12),
+            _buildCustomSliders(),
+            SizedBox(height: 14),
             Row(
               children: [
                 _selectButton("Save", true, _saveCustomSettings,
@@ -405,87 +325,413 @@ _selectButton(
                 }, activeColor: Colors.pinkAccent),
               ],
             ),
+            SizedBox(height: 20),
+            // Hint nudge to Seq tab
           ],
         ),
       ),
     );
   }
 
-  // ---------------- CUSTOM SLIDERS ----------------
+  // ════════════════════════════════════════════════════════════════════
+  // SEQ TAB — sequence builder, reads from savedSettings
+  // ════════════════════════════════════════════════════════════════════
+  Widget _buildSeqMode() {
+    return SingleChildScrollView(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(14, 12, 14, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Header ─────────────────────────────────────────────
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text("Sequence",
+                    style: TextStyle(
+                        fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold)),
+                GestureDetector(
+                  onTap: _showAddToSequenceDialog,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(vertical: 6, horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.blueAccent,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.add, color: Colors.white, size: 18),
+                        SizedBox(width: 4),
+                        Text("Add",
+                            style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15)),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 10),
+
+            // ── Reorderable list ───────────────────────────────────
+            sequenceList.isEmpty
+                ? Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[800],
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(Icons.list_alt, color: Colors.white24, size: 36),
+                        SizedBox(height: 8),
+                        Text("No modes yet — tap Add",
+                            style: TextStyle(color: Colors.white38, fontSize: 14)),
+                      ],
+                    ),
+                  )
+                : ReorderableListView.builder(
+                    shrinkWrap: true,
+                    physics: NeverScrollableScrollPhysics(),
+                    itemCount: sequenceList.length,
+                    onReorder: (oldIndex, newIndex) {
+                      setState(() {
+                        if (newIndex > oldIndex) newIndex--;
+                        final item = sequenceList.removeAt(oldIndex);
+                        sequenceList.insert(newIndex, item);
+                      });
+                    },
+                    itemBuilder: (ctx, i) {
+                      final s = sequenceList[i];
+                      return _buildSeqItem(s, i, key: ValueKey('${s.id}_$i'));
+                    },
+                  ),
+
+            SizedBox(height: 20),
+
+            // ── Direction ──────────────────────────────────────────
+            Text("Direction",
+                style: TextStyle(
+                    fontSize: 15, color: Colors.white70, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            _buildDirectionSelector(),
+
+            SizedBox(height: 18),
+
+            // ── Timing ─────────────────────────────────────────────
+            Text("Timing",
+                style: TextStyle(
+                    fontSize: 15, color: Colors.white70, fontWeight: FontWeight.bold)),
+            SizedBox(height: 8),
+            _buildTimingModeSelector(),
+            if (timingMode == TimingMode.global) ...[
+              SizedBox(height: 10),
+              _buildGlobalFreqSlider(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Seq list item ─────────────────────────────────────────────────
+  Widget _buildSeqItem(Settings s, int index, {Key? key}) {
+    return Container(
+      key: key,
+      margin: EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey[800],
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: ListTile(
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        leading: Container(
+          width: 28, height: 28,
+          decoration: BoxDecoration(
+            color: Colors.blueAccent.withOpacity(0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.blueAccent, width: 1.5),
+          ),
+          alignment: Alignment.center,
+          child: Text("${index + 1}",
+              style: TextStyle(
+                  color: Colors.blueAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13)),
+        ),
+        title: Text(s.name,
+            style: TextStyle(
+                color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+        subtitle: Text(
+          "Spd ${s.speed.toInt()}%  ·  Freq ${s.freq.toInt()}s  ·  T${s.turret.toInt()}°",
+          style: TextStyle(color: Colors.white54, fontSize: 11),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GestureDetector(
+              onTap: () => setState(() => sequenceList.removeAt(index)),
+              child: Container(
+                padding: EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: Colors.red.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Icon(Icons.close, color: Colors.redAccent, size: 17),
+              ),
+            ),
+            SizedBox(width: 6),
+            Icon(Icons.drag_handle, color: Colors.white38, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Add-to-sequence dialog ────────────────────────────────────────
+  void _showAddToSequenceDialog() {
+    final available = savedSettings.where((s) => s.id != "new_mode").toList();
+    if (available.isEmpty) {
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: Colors.grey[850],
+          title: Text("No Saved Modes", style: TextStyle(color: Colors.white)),
+          content: Text("Go to Custom and save a mode first.",
+              style: TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("OK", style: TextStyle(color: Colors.blueAccent)),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Colors.grey[850],
+        title: Text("Add to Sequence",
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: available.length,
+            itemBuilder: (ctx, i) {
+              final s = available[i];
+              return ListTile(
+                title: Text(s.name, style: TextStyle(color: Colors.white)),
+                subtitle: Text(
+                    "Spd ${s.speed.toInt()}%  ·  Freq ${s.freq.toInt()}s",
+                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                onTap: () {
+                  setState(() => sequenceList.add(s));
+                  Navigator.pop(context);
+                },
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Cancel", style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Direction selector ────────────────────────────────────────────
+  Widget _buildDirectionSelector() {
+    Widget btn(String label, String sub, SequenceDirection dir, IconData icon) {
+      final active = sequenceDirection == dir;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() => sequenceDirection = dir),
+          child: Container(
+            margin: EdgeInsets.symmetric(horizontal: 4),
+            padding: EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+            decoration: BoxDecoration(
+              color: active ? Colors.blueAccent : Colors.grey[800],
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: active ? Colors.blueAccent : Colors.white24, width: 1.5),
+            ),
+            child: Column(
+              children: [
+                Icon(icon, color: active ? Colors.white : Colors.white54, size: 20),
+                SizedBox(height: 4),
+                Text(label,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: active ? Colors.white : Colors.white70,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        btn("Top→Bot",   "1,2,3…",    SequenceDirection.topToBottom, Icons.arrow_downward),
+        btn("Bot→Top",   "…3,2,1",    SequenceDirection.bottomToTop, Icons.arrow_upward),
+      ],
+    );
+  }
+
+  // ── Timing mode selector ──────────────────────────────────────────
+  Widget _buildTimingModeSelector() {
+    Widget btn(String label, String desc, TimingMode mode) {
+      final active = timingMode == mode;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => setState(() => timingMode = mode),
+          child: Container(
+            margin: EdgeInsets.symmetric(horizontal: 4),
+            padding: EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+            decoration: BoxDecoration(
+              color: active ? Colors.orangeAccent.withOpacity(0.85) : Colors.grey[800],
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                  color: active ? Colors.orangeAccent : Colors.white24, width: 1.5),
+            ),
+            child: Column(
+              children: [
+                Text(label,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: active ? Colors.white : Colors.white70,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13)),
+                SizedBox(height: 3),
+                Text(desc,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: active ? Colors.white60 : Colors.white30,
+                        fontSize: 10)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        btn("Per-Shot", "Each mode's own freq", TimingMode.perShot),
+        btn("Global",   "One shared freq",      TimingMode.global),
+      ],
+    );
+  }
+
+  // ── Global freq slider ────────────────────────────────────────────
+  Widget _buildGlobalFreqSlider() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text("Global Freq (s): ${globalFreq.toInt()}",
+            style: TextStyle(color: Colors.white, fontSize: 16)),
+        Slider(
+          activeColor: Colors.orangeAccent, inactiveColor: Colors.grey,
+          min: 3, max: 12, divisions: 9,
+          value: globalFreq,
+          onChanged: (v) => setState(() => globalFreq = v),
+        ),
+      ],
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  // CUSTOM SLIDERS
+  // ════════════════════════════════════════════════════════════════════
   Widget _buildCustomSliders() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Speed slider with safety stop
         Text("Speed (%): ${currentCustom.speed.toInt()}",
             style: TextStyle(color: Colors.white)),
-        Slider(
-          activeColor: Colors.orangeAccent,
-          inactiveColor: Colors.grey,
-          min: 10,
-          max: 100,
-          divisions: 18,
-          value: currentCustom.speed,
-          onChanged: (v) {
-            if (v > 80 && currentCustom.speed < 80) {
-              setState(() => currentCustom.speed = 80);
-            } else {
-              setState(() => currentCustom.speed = (v / 5).round() * 5.0);
-            }
-          },
-          onChangeEnd: (v) {
-            if (v > 80) setState(() => currentCustom.speed = 100);
-          },
-        ),
+Slider(
+  activeColor: Colors.orangeAccent,
+  inactiveColor: Colors.grey,
+  min: 10,
+  max: 100,
+  divisions: 18,
+  value: currentCustom.speed,
 
-        // Turret Angle
-        Text("Turret Angle: ${currentCustom.turret.toInt()}",
+  onChangeStart: (_) {
+    // If starting below 80, lock it again
+    if (currentCustom.speed < 80) {
+      speedUnlocked = false;
+    }
+  },
+
+  onChanged: (v) {
+    setState(() {
+      double snapped = (v / 5).round() * 5.0;
+
+      // Block going past 80 unless unlocked
+      if (!speedUnlocked && snapped > 80 && currentCustom.speed <= 80) {
+        currentCustom.speed = 80;
+      } else {
+        currentCustom.speed = snapped;
+      }
+    });
+  },
+
+  onChangeEnd: (_) {
+    // If user hit 80, allow next drag to go higher
+    if (currentCustom.speed == 80) {
+      speedUnlocked = true;
+    }
+  },
+),
+
+        Text("Turret: ${currentCustom.turret.toInt()}°",
             style: TextStyle(color: Colors.white)),
         Slider(
-          activeColor: Colors.lightBlueAccent,
-          inactiveColor: Colors.grey,
-          min: -20,
-          max: 20,
-          divisions: 40,
+          activeColor: Colors.lightBlueAccent, inactiveColor: Colors.grey,
+          min: -20, max: 20, divisions: 40,
           value: currentCustom.turret,
           onChanged: (v) => setState(() => currentCustom.turret = v),
         ),
 
-        // Cowl Angle
-        Text("Cowl Angle: ${currentCustom.cowl.toInt()}",
+        Text("Cowl: ${currentCustom.cowl.toInt()}°",
             style: TextStyle(color: Colors.white)),
         Slider(
-          activeColor: Colors.purpleAccent,
-          inactiveColor: Colors.grey,
-          min: 0,
-          max: 20,
-          divisions: 20,
+          activeColor: Colors.purpleAccent, inactiveColor: Colors.grey,
+          min: 0, max: 20, divisions: 20,
           value: currentCustom.cowl,
           onChanged: (v) => setState(() => currentCustom.cowl = v),
         ),
 
-        // Spin
-        Text("Spin (Back-Top): ${currentCustom.spin.toInt()}",
+        Text("Spin: ${currentCustom.spin.toInt()}",
             style: TextStyle(color: Colors.white)),
         Slider(
-          activeColor: Colors.greenAccent,
-          inactiveColor: Colors.grey,
-          min: -10,
-          max: 10,
-          divisions: 20,
+          activeColor: Colors.greenAccent, inactiveColor: Colors.grey,
+          min: -10, max: 10, divisions: 20,
           value: currentCustom.spin,
           onChanged: (v) => setState(() => currentCustom.spin = v),
         ),
 
-        // Frequency
-        Text("Frequency (s): ${currentCustom.freq.toInt()}",
+        Text("Freq (s): ${currentCustom.freq.toInt()}",
             style: TextStyle(color: Colors.white)),
         Slider(
-          activeColor: Colors.orangeAccent,
-          inactiveColor: Colors.grey,
-          min: 3,
-          max: 12,
-          divisions: 9,
+          activeColor: Colors.orangeAccent, inactiveColor: Colors.grey,
+          min: 3, max: 12, divisions: 9,
           value: currentCustom.freq,
           onChanged: (v) => setState(() => currentCustom.freq = v),
         ),
@@ -493,17 +739,16 @@ _selectButton(
     );
   }
 
-  // ---------------- SAVE LOGIC ----------------
+  // ── Save dialog ───────────────────────────────────────────────────
   void _saveCustomSettings() {
-    TextEditingController controller = TextEditingController();
-    controller.text =
-        currentCustom.id == "new_mode" ? "" : currentCustom.name;
+    final controller = TextEditingController(
+        text: currentCustom.id == "new_mode" ? "" : currentCustom.name);
 
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: Colors.grey[850],
-        title: Text("Save Settings", style: TextStyle(color: Colors.white)),
+        title: Text("Save Mode", style: TextStyle(color: Colors.white)),
         content: TextField(
           controller: controller,
           style: TextStyle(color: Colors.white),
@@ -516,89 +761,75 @@ _selectButton(
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text("Cancel", style: TextStyle(color: Colors.white70))),
+            onPressed: () => Navigator.pop(context),
+            child: Text("Cancel", style: TextStyle(color: Colors.white70)),
+          ),
           TextButton(
-              onPressed: () {
-                if (controller.text.isNotEmpty) {
-                  setState(() {
-                    if (currentCustom.id == "new_mode") {
-                      // Create new profile
-                      Settings newProfile = Settings(
-                        id: DateTime.now().millisecondsSinceEpoch.toString(),
-                        name: controller.text,
-                        speed: currentCustom.speed,
-                        turret: currentCustom.turret,
-                        cowl: currentCustom.cowl,
-                        spin: currentCustom.spin,
-                        freq: currentCustom.freq,
-                      );
-                      savedSettings.add(newProfile);
-                      currentCustom = newProfile;
-                    } else {
-                      // Update existing profile
-                      currentCustom.name = controller.text;
-                    }
-                  });
-                  Navigator.pop(context);
-                }
-              },
-              child: Text("Save", style: TextStyle(color: Colors.orangeAccent))),
+            onPressed: () {
+              if (controller.text.isNotEmpty) {
+                setState(() {
+                  if (currentCustom.id == "new_mode") {
+                    final newProfile = Settings(
+                      id: DateTime.now().millisecondsSinceEpoch.toString(),
+                      name: controller.text,
+                      speed: currentCustom.speed,
+                      turret: currentCustom.turret,
+                      cowl: currentCustom.cowl,
+                      spin: currentCustom.spin,
+                      freq: currentCustom.freq,
+                    );
+                    savedSettings.add(newProfile);
+                    currentCustom = newProfile;
+                  } else {
+                    currentCustom.name = controller.text;
+                    // Seq tab holds references to the same objects,
+                    // so the name update is automatic.
+                  }
+                });
+                Navigator.pop(context);
+              }
+            },
+            child: Text("Save", style: TextStyle(color: Colors.orangeAccent)),
+          ),
         ],
       ),
     );
   }
 
-
-  
-  // ---------------- COURT & GRID ----------------
+  // ════════════════════════════════════════════════════════════════════
+  // COURT WIDGET
+  // ════════════════════════════════════════════════════════════════════
   Widget _buildCourt({required List<String> bottomGrid, required bool numbered}) {
-    double width = (320-40);
-    double height = width * (44 / 20);
-    const double pad = 20; //was 28
-    const double hit = 50; // was 56
+    const double pad = 20;
+    const double hit = 50;
+    final double width  = 320 - 40;
+    final double height = width * (44 / 20);
 
     return Container(
-      width: width,
-      height: height,
+      width: width, height: height,
       decoration: BoxDecoration(
         border: Border.all(width: 3, color: Colors.white70),
         color: Colors.grey[850],
       ),
       child: LayoutBuilder(
         builder: (context, c) {
-          final kitchen = c.maxHeight * (7 / 44)-20;
-
+          final kitchen = c.maxHeight * (7 / 44) - 20;
           return Column(
             children: [
               Expanded(
-                child: Stack(
-                  children: [
-                    Positioned(
-                      bottom: 0,
-                      left: 0,
-                      right: 0,
-                      height: kitchen,
-                      child: Container(color: Colors.grey[700]),
-                    ),
-                    _buildTopGrid(c, pad, hit, kitchen),
-                  ],
-                ),
+                child: Stack(children: [
+                  Positioned(bottom: 0, left: 0, right: 0, height: kitchen,
+                      child: Container(color: Colors.grey[700])),
+                  _buildTopGrid(c, pad, hit, kitchen),
+                ]),
               ),
               Container(height: 4, color: Colors.white),
               Expanded(
-                child: Stack(
-                  children: [
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      height: kitchen,
-                      child: Container(color: Colors.grey[700]),
-                    ),
-                    _buildBottomGrid(c, pad, hit, kitchen, bottomGrid, numbered),
-                  ],
-                ),
+                child: Stack(children: [
+                  Positioned(top: 0, left: 0, right: 0, height: kitchen,
+                      child: Container(color: Colors.grey[700])),
+                  _buildBottomGrid(c, pad, hit, kitchen, bottomGrid, numbered),
+                ]),
               ),
             ],
           );
@@ -607,9 +838,10 @@ _selectButton(
     );
   }
 
+  // ── Top grid (machine position) ───────────────────────────────────
   Widget _buildTopGrid(BoxConstraints c, double pad, double hit, double kitchen) {
-    final usableH = (c.maxHeight / 2 - kitchen - pad * 2);
-    final usableW = (c.maxWidth - pad * 2);
+    final usableH = c.maxHeight / 2 - kitchen - pad * 2;
+    final usableW = c.maxWidth - pad * 2;
 
     return Stack(
       children: [
@@ -617,19 +849,14 @@ _selectButton(
           for (int col = 0; col < topGridSize; col++)
             Positioned(
               left: pad + col * (usableW / (topGridSize - 1)) - hit / 2,
-              top: pad + r * (usableH / (topGridSize - 1)) - hit / 2,
+              top:  pad + r   * (usableH / (topGridSize - 1)) - hit / 2,
               child: GestureDetector(
-                onTap: () => setState(() {
-                  topRow = r;
-                  topCol = col;
-                }),
+                onTap: () => setState(() { topRow = r; topCol = col; }),
                 child: Container(
-                  width: hit,
-                  height: hit,
+                  width: hit, height: hit,
                   alignment: Alignment.center,
                   child: Container(
-                    width:32,
-                    height: 32,
+                    width: 32, height: 32,
                     decoration: BoxDecoration(
                         shape: BoxShape.circle, color: Colors.white70),
                   ),
@@ -638,325 +865,173 @@ _selectButton(
             ),
         Positioned(
           left: pad + topCol * (usableW / (topGridSize - 1)) - 14,
-          top: pad + topRow * (usableH / (topGridSize - 1)) - 14,
+          top:  pad + topRow * (usableH / (topGridSize - 1)) - 14,
           child: Icon(Icons.sports_tennis, size: 28, color: Colors.blueAccent),
         ),
       ],
     );
   }
 
-Widget selectedDotsDisplay(List<String> dots) {
-  if (dots.isEmpty) {
-    return Text(
-      "None",
-      style: TextStyle(color: Colors.white70, fontSize: 16),
+  // ════════════════════════════════════════════════════════════════════
+  // BOTTOM GRID — improved drag select
+  //
+  // Key fix: erase-vs-add is decided by the FIRST dot the finger touches.
+  // If that dot is already selected  → the whole stroke erases.
+  // If that dot is unselected        → the whole stroke adds.
+  // This makes it completely predictable regardless of drag direction.
+  // ════════════════════════════════════════════════════════════════════
+  Widget _buildBottomGrid(
+    BoxConstraints c, double pad, double hit, double kitchen,
+    List<String> bottomGrid, bool numbered,
+  ) {
+    final usableH = c.maxHeight / 2 - kitchen - pad * 2;
+    final usableW = c.maxWidth - pad * 2;
+
+    String? keyAt(Offset local) {
+      final col = ((local.dx - pad) / (usableW / (bottomGridSizeColumns - 1))).round();
+      final row = ((local.dy - pad - kitchen) / (usableH / (bottomGridSizeRows - 1))).round();
+      if (row < 0 || row >= bottomGridSizeRows ||
+          col < 0 || col >= bottomGridSizeColumns) return null;
+      return "$col,$row";
+    }
+
+    void handleDot(String key) {
+      if (_dragVisited.contains(key)) return;
+      _dragVisited.add(key);
+      setState(() {
+        if (_dragErasing == true) {
+          bottomGrid.remove(key);
+        } else {
+          if (!bottomGrid.contains(key)) bottomGrid.add(key);
+        }
+      });
+    }
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+
+      onPanStart: (details) {
+        _dragVisited.clear();
+        final key = keyAt(details.localPosition);
+        if (key != null) {
+          // Set intent from the FIRST dot touched
+          _dragErasing = bottomGrid.contains(key);
+          handleDot(key);
+        } else {
+          _dragErasing = false; // started outside grid, default to add
+        }
+      },
+
+      onPanUpdate: (details) {
+        if (_dragErasing == null) return;
+        final key = keyAt(details.localPosition);
+        if (key != null) handleDot(key);
+      },
+
+      onPanEnd: (_) {
+        _dragVisited.clear();
+        _dragErasing = null;
+      },
+
+      child: Stack(
+        children: [
+          for (int r = 0; r < bottomGridSizeRows; r++)
+            for (int col = 0; col < bottomGridSizeColumns; col++)
+              _buildBottomCell(
+                  r, col, usableW, usableH, pad, hit, kitchen, bottomGrid, numbered),
+        ],
+      ),
     );
   }
 
-  return Wrap(
-    spacing: 6,
-    runSpacing: 4,
-    children: dots.map((dot) {
-      return Container(
-        padding: EdgeInsets.symmetric(vertical: 4, horizontal: 6),
-        decoration: BoxDecoration(
-          color: Colors.grey[700],
-          borderRadius: BorderRadius.circular(6),
-        ),
-        child: Text(
-          dot,
-          style: TextStyle(color: Colors.white, fontSize: 14),
-        ),
-      );
-    }).toList(),
-  );
-}
+  Widget _buildBottomCell(
+    int r, int c, double w, double h,
+    double pad, double hit, double kitchen,
+    List<String> bottomGrid, bool numbered,
+  ) {
+    final key      = "$c,$r";
+    final index    = bottomGrid.indexOf(key);
+    final selected = index >= 0;
 
-  // ---------------- DEBUG MODE ----------------
-Widget _buildDebugMode() {
-  return SingleChildScrollView(
-    padding: EdgeInsets.all(16),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+    final Color selColor;
+    final Color unselColor;
+    if (currentMode == AppMode.grid) {
+      selColor   = gridSelectedColor;
+      unselColor = gridUnselectedColor;
+    } else if (currentMode == AppMode.random) {
+      selColor   = randomSelectedColor;
+      unselColor = randomUnselectedColor;
+    } else {
+      selColor   = Colors.redAccent;
+      unselColor = Colors.white70;
+    }
 
-        SizedBox(height: 16),
-
-        // ---------------- GRID MODE ----------------
-        Text(
-          "GRID MODE",
-          style: TextStyle(color: Colors.lightBlueAccent, fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-        SizedBox(height: 8),
-        Text("Top Grid Selected Position:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("Row: $topRow, Col: $topCol", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Bottom Grid Selected Dots (Order):", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        selectedDotsDisplay(bottomSelectionOrder),
-        SizedBox(height: 4),
-        Text("Pattern Selected:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text(pattern, style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Speed:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text(speedPattern, style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Speed Adjustment:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${speedAdjustment.toInt()}%", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Frequency:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${freq.toInt()}s", style: TextStyle(color: Colors.white70, fontSize: 16)),
-
-        SizedBox(height: 20),
-
-                // ---------------- CUSTOM MODE ----------------
-        Text(
-          "CUSTOM MODE",
-          style: TextStyle(color: Colors.orangeAccent, fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-        SizedBox(height: 8),
-        Text("Selected Mode:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text(currentCustom.name, style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Speed:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${currentCustom.speed.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Turret:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${currentCustom.turret.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Cowl:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${currentCustom.cowl.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Spin:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${currentCustom.spin.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Frequency:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${currentCustom.freq.toInt()}", style: TextStyle(color: Colors.white70, fontSize: 16)),
-
-       SizedBox(height: 20),
-
-        // ---------------- RANDOM MODE ----------------
-        Text(
-          "RANDOM MODE",
-          style: TextStyle(color: Colors.redAccent, fontSize: 22, fontWeight: FontWeight.bold),
-        ),
-        SizedBox(height: 8),
-        Text("Top Grid Selected Position:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("Row: $topRow, Col: $topCol", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Bottom Grid Selected Dots (Order):", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        selectedDotsDisplay(randomBottomSelection),
-        SizedBox(height: 4),
-        Text("Speed:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text(speedPattern, style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Speed Adjustment:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${speedAdjustment.toInt()}%", style: TextStyle(color: Colors.white70, fontSize: 16)),
-        SizedBox(height: 4),
-        Text("Frequency:", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-        Text("${freq.toInt()}s", style: TextStyle(color: Colors.white70, fontSize: 16)),
-
-        SizedBox(height: 20),
-      ],
-    ),
-  );
-}
-
-Widget _buildBottomGrid(
-  BoxConstraints c,
-  double pad,
-  double hit,
-  double kitchen,
-  List<String> bottomGrid,
-  bool numbered,
-) {
-  final usableH = c.maxHeight / 2 - kitchen - pad * 2;
-  final usableW = c.maxWidth - pad * 2;
-
-  return GestureDetector(
-    behavior: HitTestBehavior.opaque,
-
-onPanStart: (details) {
-  dragVisited.clear();
-  dragStart = details.localPosition;
-},
-
-onPanUpdate: (details) {
-  final local = details.localPosition;
-
-  // Decide erase vs add based on drag direction
-  if (dragStart != null) {
-    final delta = local - dragStart!;
-    eraseMode = delta.dy < 0; // dragging up = erase
-  }
-
-  final col =
-      ((local.dx - pad) / (usableW / (bottomGridSizeColumns - 1))).round();
-  final row =
-      ((local.dy - pad - kitchen) / (usableH / (bottomGridSizeRows - 1)))
-          .round();
-
-  if (row < 0 ||
-      row >= bottomGridSizeRows ||
-      col < 0 ||
-      col >= bottomGridSizeColumns) return;
-
-  final key = "$row,$col";
-
-  if (!dragVisited.contains(key)) {
-    dragVisited.add(key);
-    setState(() {
-      if (eraseMode) {
-        bottomGrid.remove(key);
-      } else {
-        if (!bottomGrid.contains(key)) bottomGrid.add(key);
-      }
-    });
-  }
-},
-
-onPanEnd: (_) {
-  dragVisited.clear();
-  dragStart = null;
-  eraseMode = false;
-},
-
-    child: Stack(
-      children: [
-        for (int r = 0; r < bottomGridSizeRows; r++)
-          for (int col = 0; col < bottomGridSizeColumns; col++)
-            _buildBottomCell(
-              r,
-              col,
-              usableW,
-              usableH,
-              pad,
-              hit,
-              kitchen,
-              bottomGrid,
-              numbered,
-            ),
-      ],
-    ),
-  );
-}
-
-Widget _buildBottomCell(
-    int r,
-    int c,
-    double w,
-    double h,
-    double pad,
-    double hit,
-    double kitchen,
-    List<String> bottomGrid,
-    bool numbered,
-) {
-  final key = "$r,$c";
-  final index = bottomGrid.indexOf(key);
-  final isSelected = index >= 0;
-
-  // ----------------- Colors based on mode -----------------
-  Color selectedColor;
-  Color unselectedColor;
-
-  if (currentMode == AppMode.grid) {
-    selectedColor = gridSelectedColor;    // e.g., Colors.redAccent
-    unselectedColor = gridUnselectedColor; // e.g., Colors.white70
-  } else if (currentMode == AppMode.random) {
-    selectedColor = randomSelectedColor;    // e.g., Colors.greenAccent
-    unselectedColor = randomUnselectedColor; // e.g., Colors.white54
-  } else {
-    selectedColor = Colors.redAccent;
-    unselectedColor = Colors.white70;
-  }
-
-  // ----------------- Return cell -----------------
-  return Positioned(
-    left: pad + c * (w / (bottomGridSizeColumns - 1)) - hit / 2,
-    top: pad + kitchen + r * (h / (bottomGridSizeRows - 1)) - hit / 2,
-    child: GestureDetector(
-      onTap: () {
-        setState(() {
-          if (bottomGrid.contains(key))
-            bottomGrid.remove(key);
-          else
-            bottomGrid.add(key);
-        });
-      },
-      child: Container(
-        width: hit,
-        height: hit,
-        alignment: Alignment.center,
+    return Positioned(
+      left: pad + c * (w / (bottomGridSizeColumns - 1)) - hit / 2,
+      top:  pad + kitchen + r * (h / (bottomGridSizeRows - 1)) - hit / 2,
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            if (bottomGrid.contains(key)) bottomGrid.remove(key);
+            else bottomGrid.add(key);
+          });
+        },
         child: Container(
-          width: 30,
-          height: 30,
+          width: hit, height: hit,
           alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isSelected ? selectedColor : unselectedColor, // <-- USE HERE
+          child: Container(
+            width: 30, height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: selected ? selColor : unselColor,
+            ),
+            child: (numbered && selected)
+                ? Text("${index + 1}",
+                    style: TextStyle(
+                        color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold))
+                : null,
           ),
-          child: (numbered && isSelected)
-              ? Text(
-                  "${index + 1}",
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold),
-                )
-              : null,
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
-  // ---------------- PATTERN / SPEED / FREQ ----------------
+  // ════════════════════════════════════════════════════════════════════
+  // SHARED CONTROLS
+  // ════════════════════════════════════════════════════════════════════
 Widget _buildPatternButtons() {
   return Column(
     children: [
-      Container(
-        width: double.infinity, // ensure full width
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            // Centered 1-8 button
-            _selectButton(
-              "1-8,8-1",
-              pattern == "1-8,8-1",
-              () => setState(() => pattern = "1-8,8-1"),
-            ),
+      // CLEAR button (top)
+      _selectButton(
+        "Clear",
+        clearGridActive,
+        () {
+          setState(() {
+            bottomSelectionOrder.clear();
+            clearGridActive = true;
+          });
+          Future.delayed(Duration(milliseconds: 150),
+              () => setState(() => clearGridActive = false));
+        },
+        activeColor: Colors.redAccent,
+        fontSize: 14,
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
 
-            // Clear button on the right
-Positioned(
-  right: 70,
-  child: _selectButton(
-    "Clear Grid",
-    clearGridActive, // <-- use this variable instead of false
-    () {
-      setState(() {
-        bottomSelectionOrder.clear(); // clear the grid
-        clearGridActive = true;       // trigger highlight
-      });
+      SizedBox(height: 10),
 
-      // Reset the highlight after 300 milliseconds
-      Future.delayed(Duration(milliseconds: 150), () {
-        setState(() {
-          clearGridActive = false;
-        });
-      });
-    },
-    activeColor: Colors.redAccent,
-    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-    fontSize: 14,
-  ),
-),
-          ],
-        ),
+      // First pattern
+      _selectButton(
+        "1-8,8-1",
+        pattern == "1-8,8-1",
+        () => setState(() => pattern = "1-8,8-1"),
       ),
 
       SizedBox(height: 8),
 
-      // Second pattern button stays below
+      // Second pattern
       _selectButton(
         "1-8,1-8",
         pattern == "1-8,1-8",
@@ -976,11 +1051,31 @@ Positioned(
           _selectButton("Slow", speedPattern == "Slow",
               () => setState(() => speedPattern = "Slow")),
           SizedBox(width: 8),
-          _selectButton("Medium", speedPattern == "Medium",
+          _selectButton("Med", speedPattern == "Medium",
               () => setState(() => speedPattern = "Medium")),
           SizedBox(width: 8),
           _selectButton("Fast", speedPattern == "Fast",
               () => setState(() => speedPattern = "Fast")),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpeedAdjustmentSlider() {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Speed adj: ${speedAdjustment.toInt()}",
+              style: TextStyle(color: Colors.white, fontSize: 16)),
+          Slider(
+            activeColor: Colors.lightBlueAccent, inactiveColor: Colors.grey,
+            min: 0, max: 10, divisions: 10,
+            value: speedAdjustment,
+            onChanged: (v) => setState(() => speedAdjustment = v),
+          ),
+          SizedBox(height: 8),
         ],
       ),
     );
@@ -992,13 +1087,11 @@ Positioned(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text("Frequency (s): ${freq.toInt()}", style: TextStyle(color: Colors.white, fontSize: 18)),
+          Text("Freq (s): ${freq.toInt()}",
+              style: TextStyle(color: Colors.white, fontSize: 16)),
           Slider(
-            activeColor: Colors.orangeAccent,
-            inactiveColor: Colors.grey,
-            min: 3,
-            max: 12,
-            divisions: 9,
+            activeColor: Colors.orangeAccent, inactiveColor: Colors.grey,
+            min: 3, max: 12, divisions: 9,
             value: freq,
             onChanged: (v) => setState(() => freq = v),
           ),
@@ -1007,62 +1100,153 @@ Positioned(
     );
   }
 
-// ---------------- START/STOP BUTTONS ----------------
-Widget _buildStartStop() {
-  return Padding(
-    padding: EdgeInsets.symmetric(vertical: 12),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      children: [
-        _selectButton(
-          "START",
-          isRunning,
-          () => setState(() => isRunning = true),
-          activeColor: Colors.greenAccent,
-          fontSize: 25, // bigger text
-          padding: EdgeInsets.symmetric(vertical: 10, horizontal: 20), // bigger button
-        ),
-        _selectButton(
-          "STOP",
-          !isRunning,
-          () => setState(() => isRunning = false),
-          activeColor: Colors.redAccent,
-          fontSize: 25,
-          padding: EdgeInsets.symmetric(vertical: 10, horizontal: 20),
-        ),
-      ],
-    ),
-  );
-}
+  // ════════════════════════════════════════════════════════════════════
+  // START / STOP
+  // ════════════════════════════════════════════════════════════════════
+  Widget _buildStartStop() {
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _selectButton("START", isRunning,
+              () => setState(() => isRunning = true),
+              activeColor: Colors.greenAccent, fontSize: 24,
+              padding: EdgeInsets.symmetric(vertical: 10, horizontal: 24)),
+          _selectButton("STOP", !isRunning,
+              () => setState(() => isRunning = false),
+              activeColor: Colors.redAccent, fontSize: 24,
+              padding: EdgeInsets.symmetric(vertical: 10, horizontal: 24)),
+        ],
+      ),
+    );
+  }
 
-// ---------------- GENERIC BUTTON ----------------
-Widget _selectButton(
-  String text,
-  bool active,
-  VoidCallback onTap, {
-  Color activeColor = Colors.blueAccent,
-  double fontSize = 18, // default text size
-  EdgeInsets padding =
-      const EdgeInsets.symmetric(vertical: 8, horizontal: 14), // default padding
-}) {
-  return GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding: padding, // configurable padding
-      decoration: BoxDecoration(
-        color: active ? activeColor : Colors.grey[700],
-        borderRadius: BorderRadius.circular(12),
+  // ════════════════════════════════════════════════════════════════════
+  // DEBUG MODE
+  // ════════════════════════════════════════════════════════════════════
+  Widget _buildDebugMode() {
+    Widget kv(String k, String v) => Padding(
+      padding: EdgeInsets.only(bottom: 4),
+      child: RichText(
+        text: TextSpan(children: [
+          TextSpan(text: "$k: ",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+          TextSpan(text: v,
+              style: TextStyle(color: Colors.white70, fontSize: 14)),
+        ]),
       ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: fontSize, // configurable text size
-          color: active ? Colors.white : Colors.white70,
-          fontWeight: FontWeight.bold,
+    );
+
+    Widget section(String title, Color color, List<Widget> children) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title,
+            style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold)),
+        SizedBox(height: 6),
+        ...children,
+        SizedBox(height: 18),
+      ],
+    );
+
+    final effectiveSeq = _buildEffectiveSequence();
+
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(height: 10),
+
+          section("GRID", Colors.lightBlueAccent, [
+            kv("Top pos",   "col $topCol  row $topRow"),
+            kv("Dots",      bottomSelectionOrder.isEmpty ? "None" : bottomSelectionOrder.join(" → ")),
+            kv("Pattern",   pattern),
+            kv("Speed",     speedPattern),
+            kv("Speed adj", "${speedAdjustment.toInt()}x"),
+            kv("Freq",      "${freq.toInt()}s"),
+          ]),
+
+          section("RANDOM", Colors.redAccent, [
+            kv("Dots",      randomBottomSelection.isEmpty ? "None" : randomBottomSelection.join(", ")),
+            kv("Speed",     speedPattern),
+            kv("Speed adj", "${speedAdjustment.toInt()}x"),
+            kv("Freq",      "${freq.toInt()}s"),
+          ]),
+
+          section("CUSTOM", Colors.orangeAccent, [
+            kv("Mode",   currentCustom.name),
+            kv("Speed",  "${currentCustom.speed.toInt()}%"),
+            kv("Turret", "${currentCustom.turret.toInt()}°"),
+            kv("Cowl",   "${currentCustom.cowl.toInt()}°"),
+            kv("Spin",   "${currentCustom.spin.toInt()}"),
+            kv("Freq",   "${currentCustom.freq.toInt()}s"),
+          ]),
+
+          section("SEQ", Colors.purpleAccent, [
+            kv("Direction", _directionLabel(sequenceDirection)),
+            kv("Timing",    timingMode == TimingMode.perShot
+                ? "Per-shot" : "Global ${globalFreq.toInt()}s"),
+            kv("Order",     sequenceList.isEmpty ? "Empty"
+                : sequenceList.map((s) => s.name).join(" → ")),
+            kv("Playback",  effectiveSeq.isEmpty ? "Empty"
+                : effectiveSeq.map((s) => s.name).join(" → ")),
+            if (effectiveSeq.isNotEmpty) ...[
+              SizedBox(height: 4),
+              ...effectiveSeq.asMap().entries.map((e) {
+                final f = timingMode == TimingMode.global
+                    ? globalFreq.toInt() : e.value.freq.toInt();
+                return kv("  ${e.key + 1}. ${e.value.name}", "freq ${f}s");
+              }),
+            ],
+          ]),
+        ],
+      ),
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────
+  List<Settings> _buildEffectiveSequence() {
+    if (sequenceList.isEmpty) return [];
+    switch (sequenceDirection) {
+      case SequenceDirection.topToBottom:
+        return List.from(sequenceList);
+      case SequenceDirection.bottomToTop:
+        return List.from(sequenceList.reversed);
+    }
+  }
+
+  String _directionLabel(SequenceDirection d) {
+    switch (d) {
+      case SequenceDirection.topToBottom: return "Top → Bottom | Bottom → Top";
+      case SequenceDirection.bottomToTop: return "Bottom → Top";
+    }
+  }
+
+  // ── Generic button ────────────────────────────────────────────────
+  Widget _selectButton(
+    String text, bool active, VoidCallback onTap, {
+    Color activeColor = Colors.blueAccent,
+    double fontSize   = 18,
+    EdgeInsets padding =
+        const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: padding,
+        decoration: BoxDecoration(
+          color: active ? activeColor : Colors.grey[700],
+          borderRadius: BorderRadius.circular(12),
         ),
+        child: Text(text,
+            style: TextStyle(
+              fontSize: fontSize,
+              color: active ? Colors.white : Colors.white70,
+              fontWeight: FontWeight.bold,
+            )),
       ),
-    ),
-  );
+    );
+  }
 }
-}
-//the end
+// the end
