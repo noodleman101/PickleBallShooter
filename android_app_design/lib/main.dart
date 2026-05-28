@@ -33,18 +33,46 @@ class MachineSettings {
   int get hashCode => id.hashCode;
 }
 
+// A saved sequence is a named list of MachineSettings references
+class SavedSequence {
+  final String id;
+  String name;
+  List<String> modeIds; // ordered list of mode ids
+  SequenceDirection dir;
+  TimingMode timing;
+  double gFreq;
+
+  SavedSequence({
+    required this.id,
+    required this.name,
+    required this.modeIds,
+    required this.dir,
+    required this.timing,
+    required this.gFreq,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────
 // DESIGN TOKENS — Dark Minimal
 // ─────────────────────────────────────────────────────────────────
 class T {
   static const bg      = Color(0xFF0C0D10);
   static const surface = Color(0xFF141519);
-  static const courtMain = Color.fromARGB(255, 21, 29, 22);
-  static const courtKitchen = Color.fromARGB(255, 22, 37, 29);
   static const raised  = Color(0xFF1C1E25);
   static const border  = Color(0xFF252830);
   static const divider = Color(0xFF1E2027);
-  static const net = Color.fromARGB(255, 220, 177, 21);
+
+  // ── Court colors (new warm slate + clay scheme) ──────────────
+  // Main court: deep blue-slate, like a premium hardcourt
+  static const courtMain    = Color(0xFF1A2235);
+  // Kitchen: warm terracotta/clay tint — immediately readable
+  static const courtKitchen = Color.fromARGB(255, 35, 44, 69);
+  // Court border/line tint
+  static const courtLine    = Color(0xFF2E3850);
+  // Net: warm gold stays, it pops against both zones
+  static const net          = Color(0xFFD4A843);
+  // Court divider line (centre service line, etc.)
+  static const courtDiv     = Color(0xFF243048);
 
   static const cyan    = Color.fromARGB(255, 0, 178, 213);
   static const cyanDim = Color(0xFF0A1E24);
@@ -61,12 +89,20 @@ class T {
   static const textMid = Color(0xFF6B7180);
   static const textLo  = Color(0xFF383C48);
 
-  static const dotOn   = Color(0xFF00D4FF);
-  static const rDotOn  = Color(0xFFFF3B55);
-  static const dotOff  = Color.fromARGB(255, 84, 84, 84);
-  static const kitchenDot = Color(0xFF2A2D38);
+  // Dots: on the blue court, bright cyan reads sharply
+  static const dotOn      = Color.fromARGB(255, 8, 219, 46);
+  // Random mode dots: warm coral/orange-red pops on clay kitchen too
+  static const rDotOn     = Color(0xFFFF5C6E);
+  // Off dot: slate-blue tint matches the court
+  static const dotOff     = Color(0xFF2E3A52);
+  // Kitchen off dot: slightly warmer to match kitchen zone
+  static const kitchenDot = Color(0xFF2E3A52);
 
   static const shadow  = Color(0x55000000);
+
+  // Warning color for deleted modes in sequences
+  static const warn    = Color(0xFFFFAA00);
+  static const warnDim = Color(0xFF1E1400);
 }
 
 TextStyle tx(double sz, Color c,
@@ -181,10 +217,9 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
 
-    // ── persistence ───────────────────────────────────────────────
+  // ── persistence ───────────────────────────────────────────────
   Future<void> _savePrefs() async {
     final p = await SharedPreferences.getInstance();
-    // Shared settings
     await p.setDouble('freq', freq);
     await p.setDouble('speedAdj', speedAdj);
     await p.setInt('numBalls', numBalls);
@@ -196,7 +231,7 @@ class _MainPageState extends State<MainPage> {
     await p.setString('seqDir', seqDir.name);
     await p.setString('timing', timing.name);
 
-    // Saved custom modes (skip the built-in new_mode)
+    // Saved custom modes
     final modes = saved.where((s) => s.id != 'new_mode').toList();
     await p.setInt('savedCount', modes.length);
     for (int i = 0; i < modes.length; i++) {
@@ -210,18 +245,30 @@ class _MainPageState extends State<MainPage> {
       await p.setDouble('mode_${i}_freq',   s.freq);
     }
 
-    // Seq list (store as list of saved mode ids in order)
+    // Active (unsaved) seq list
     final seqIds = seqList.map((s) => s.id).toList();
     await p.setStringList('seqList', seqIds);
 
     // Current custom selection
     await p.setString('curCustomId', curCustom.id);
+
+    // Saved sequences
+    await p.setInt('savedSeqCount', savedSeqs.length);
+    for (int i = 0; i < savedSeqs.length; i++) {
+      final sq = savedSeqs[i];
+      await p.setString('seq_${i}_id',      sq.id);
+      await p.setString('seq_${i}_name',    sq.name);
+      await p.setStringList('seq_${i}_modeIds', sq.modeIds);
+      await p.setString('seq_${i}_dir',     sq.dir.name);
+      await p.setString('seq_${i}_timing',  sq.timing.name);
+      await p.setDouble('seq_${i}_gFreq',   sq.gFreq);
+    }
+    await p.setString('curSavedSeqId', curSavedSeq?.id ?? '');
   }
 
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
 
-    // Shared settings
     freq       = p.getDouble('freq')       ?? 7;
     speedAdj   = p.getDouble('speedAdj')   ?? 1;
     numBalls   = p.getInt('numBalls')      ?? 10;
@@ -257,7 +304,7 @@ class _MainPageState extends State<MainPage> {
     }
     saved = [_newTpl, ...loadedModes];
 
-    // Restore seq list from ids
+    // Active seq list
     final seqIds = p.getStringList('seqList') ?? [];
     seqList.clear();
     for (final id in seqIds) {
@@ -266,11 +313,39 @@ class _MainPageState extends State<MainPage> {
       if (match.id != 'new_mode') seqList.add(match);
     }
 
-    // Restore current custom selection
+    // Current custom selection
     final curId = p.getString('curCustomId') ?? 'new_mode';
     curCustom = saved.firstWhere((s) => s.id == curId,
         orElse: () => _newTpl);
+
+    // Saved sequences
+    final sqCount = p.getInt('savedSeqCount') ?? 0;
+    savedSeqs.clear();
+    for (int i = 0; i < sqCount; i++) {
+      final id = p.getString('seq_${i}_id');
+      if (id == null) continue;
+      final dirStr = p.getString('seq_${i}_dir') ?? 'topToBottom';
+      final timStr = p.getString('seq_${i}_timing') ?? 'perShot';
+      savedSeqs.add(SavedSequence(
+        id:      id,
+        name:    p.getString('seq_${i}_name') ?? 'Sequence $i',
+        modeIds: p.getStringList('seq_${i}_modeIds') ?? [],
+        dir:     SequenceDirection.values.firstWhere(
+            (e) => e.name == dirStr, orElse: () => SequenceDirection.topToBottom),
+        timing:  TimingMode.values.firstWhere(
+            (e) => e.name == timStr, orElse: () => TimingMode.perShot),
+        gFreq:   p.getDouble('seq_${i}_gFreq') ?? 7,
+      ));
+    }
+
+    // Restore current saved seq selection
+    final curSqId = p.getString('curSavedSeqId') ?? '';
+    if (curSqId.isNotEmpty) {
+      curSavedSeq = savedSeqs.firstWhere((sq) => sq.id == curSqId,
+          orElse: () => savedSeqs.isEmpty ? _nullSeq : savedSeqs.first);
+    }
   }
+
   AppMode mode = AppMode.grid;
 
   bool connected = false;
@@ -301,16 +376,28 @@ class _MainPageState extends State<MainPage> {
   late MachineSettings curCustom;
   late List<MachineSettings> saved;
 
+  // Active sequence list (unsaved working state)
   final List<MachineSettings> seqList = [];
   SequenceDirection seqDir = SequenceDirection.topToBottom;
   TimingMode        timing = TimingMode.perShot;
   double            gFreq  = 7;
 
+  // Saved sequences
+  final List<SavedSequence> savedSeqs = [];
+  SavedSequence? curSavedSeq;
+
+  // Sentinel "no saved seq selected"
+  final SavedSequence _nullSeq = SavedSequence(
+    id: '__none__', name: 'Unsaved', modeIds: [],
+    dir: SequenceDirection.topToBottom,
+    timing: TimingMode.perShot, gFreq: 7,
+  );
+
   double startDelay  = 0;
   bool   showRunning = false;
 
   int?    ballsLeft;
-  double? delaySeconds;   // fractional countdown
+  double? delaySeconds;
   Timer?  _ballTimer;
   Timer?  _delayTicker;
 
@@ -322,7 +409,7 @@ class _MainPageState extends State<MainPage> {
         speed: 10, turret: 0, cowl: 0, spin: 0, freq: 7);
     curCustom = _newTpl;
     saved = [_newTpl];
-    _loadPrefs().then((_) => setState(() {}));  // ← load on startup
+    _loadPrefs().then((_) => setState(() {}));
   }
 
   @override
@@ -376,7 +463,6 @@ class _MainPageState extends State<MainPage> {
 
     if (startDelay > 0) {
       setState(() => delaySeconds = startDelay);
-      // tick 60fps-ish for smooth decimal display
       _delayTicker = Timer.periodic(const Duration(milliseconds: 50), (t) {
         setState(() {
           if (delaySeconds != null) {
@@ -394,6 +480,14 @@ class _MainPageState extends State<MainPage> {
       beginRunning();
     }
   }
+
+  // ── Deleted-mode detection ─────────────────────────────────────
+  // Returns true if any mode in seqList no longer exists in saved
+  bool get _seqHasDeletedModes =>
+      seqList.any((m) => !saved.any((s) => s.id == m.id));
+
+  bool _modeIsDeleted(MachineSettings m) =>
+      !saved.any((s) => s.id == m.id);
 
   // ─────────────────────────────────────────────────────────────
   // BUILD
@@ -518,7 +612,7 @@ class _MainPageState extends State<MainPage> {
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
             margin: const EdgeInsets.symmetric(horizontal: 2),
-            height: 36,
+            height: 42,
             decoration: BoxDecoration(
               color: active ? T.cyanDim : T.raised,
               borderRadius: BorderRadius.circular(6),
@@ -569,7 +663,7 @@ class _MainPageState extends State<MainPage> {
       const SizedBox(height: 8),
       _speedRow(),
       const SizedBox(height: 8),
-      _sliderSheet('SPEED ADJ', '${speedAdj.toInt()}', T.cyan, T.cyanDim,
+      _sliderSheet('SPEED ADJ', '${speedAdj.toInt()}', T.green, T.cyanDim,
         Slider(min: -5, max: 5, divisions: 10, value: speedAdj,
           onChanged: (v) { _stopAll(); setState(() => speedAdj = v); }),
       ),
@@ -661,6 +755,79 @@ class _MainPageState extends State<MainPage> {
   Widget _seqMode() => SingleChildScrollView(
     padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+      // ── Saved sequence dropdown (mirrors Custom tab) ──────────
+      _Sheet(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        child: DropdownButton<SavedSequence>(
+          isExpanded: true,
+          dropdownColor: T.surface,
+          underline: const SizedBox(),
+          value: curSavedSeq ?? _nullSeq,
+          style: tx(14, T.textHi),
+          iconEnabledColor: T.textMid,
+          items: [
+            DropdownMenuItem(
+              value: _nullSeq,
+              child: Text('Unsaved', style: tx(14, T.textMid)),
+            ),
+            ...savedSeqs.map((sq) => DropdownMenuItem(
+              value: sq,
+              child: Text(sq.name, style: tx(14, T.textHi)),
+            )),
+          ],
+          onChanged: (sq) {
+            if (sq == null) return;
+            _stopAll();
+            setState(() {
+              if (sq.id == _nullSeq.id) {
+                curSavedSeq = null;
+              } else {
+                curSavedSeq = sq;
+                // Load the saved sequence into the working state
+                _loadSavedSeq(sq);
+              }
+            });
+          },
+        ),
+      ),
+
+      // ── Save action buttons ────────────────────────────────────
+      Wrap(spacing: 8, runSpacing: 8, children: [
+        _Pill('UPDATE', true, _updateSavedSeq,
+            accent: T.green, accentBg: T.greenDim),
+        _Pill('SAVE NEW', true, _saveNewSeq,
+            accent: T.amber, accentBg: T.amberDim),
+        _Pill('RENAME', true, _renameSavedSeq,
+            accent: T.cyan, accentBg: T.cyanDim),
+        if (curSavedSeq != null)
+          _Pill('DELETE', true, _deleteSavedSeq,
+              accent: T.red, accentBg: T.redDim),
+      ]),
+      const SizedBox(height: 14),
+
+      // ── Deleted modes warning banner ───────────────────────────
+      if (_seqHasDeletedModes)
+        Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: T.warnDim,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: T.warn.withOpacity(0.5)),
+          ),
+          child: Row(children: [
+            Icon(Icons.warning_amber_rounded, color: T.warn, size: 18),
+            const SizedBox(width: 8),
+            Expanded(child: Text(
+              'Some modes in this sequence were deleted. '
+              'Remove them or replace before running.',
+              style: tx(11, T.warn),
+            )),
+          ]),
+        ),
+
+      // ── Sequence list ─────────────────────────────────────────
       Row(children: [
         Text('SEQUENCE', style: tx(18, T.textMid, w: FontWeight.w700, ls: 1.5)),
         const Spacer(),
@@ -694,7 +861,7 @@ class _MainPageState extends State<MainPage> {
                   _seqItem(seqList[i], i, key: ValueKey('${seqList[i].id}_$i')),
             ),
       const SizedBox(height: 12),
-      Text('DIRECTION', style: tx(14, T.textMid, w: FontWeight.w700, ls: 1.2)),
+      Text('ORDER', style: tx(14, T.textMid, w: FontWeight.w700, ls: 1.2)),
       const SizedBox(height: 8),
       _dirRow(),
       const SizedBox(height: 12),
@@ -713,28 +880,80 @@ class _MainPageState extends State<MainPage> {
     ]),
   );
 
-  Widget _seqItem(MachineSettings s, int i, {Key? key}) =>
-    ReorderableDragStartListener(
+  // Load a saved sequence into the active working state
+  void _loadSavedSeq(SavedSequence sq) {
+    seqList.clear();
+    for (final id in sq.modeIds) {
+      final match = saved.firstWhere((s) => s.id == id,
+          orElse: () => _deletedPlaceholder(id));
+      seqList.add(match);
+    }
+    seqDir = sq.dir;
+    timing = sq.timing;
+    gFreq  = sq.gFreq;
+  }
+
+  // Placeholder for a deleted mode — keeps it visible with a warning
+  MachineSettings _deletedPlaceholder(String id) => MachineSettings(
+    id: id, name: '[DELETED]',
+    speed: 0, turret: 0, cowl: 0, spin: 0, freq: 7,
+  );
+
+  // ── Seq item (with deleted-mode highlight) ────────────────────
+  Widget _seqItem(MachineSettings s, int i, {Key? key}) {
+    final isDeleted = _modeIsDeleted(s);
+    return ReorderableDragStartListener(
       key: key, index: i,
       child: _Sheet(
+        accent: isDeleted ? T.red : null,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         child: Row(children: [
           Container(
             width: 24, height: 24,
             decoration: BoxDecoration(
-              color: T.cyanDim,
+              color: isDeleted ? T.redDim : T.cyanDim,
               shape: BoxShape.circle,
-              border: Border.all(color: T.cyan.withOpacity(0.4)),
+              border: Border.all(
+                  color: isDeleted ? T.red.withOpacity(0.4) : T.cyan.withOpacity(0.4)),
             ),
             alignment: Alignment.center,
-            child: Text('${i + 1}', style: tx(10, T.cyan, w: FontWeight.w700)),
+            child: Text('${i + 1}',
+                style: tx(10, isDeleted ? T.red : T.cyan, w: FontWeight.w700)),
           ),
           const SizedBox(width: 10),
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(s.name, style: tx(16, T.textHi, w: FontWeight.w600)),
-            Text('SPD ${s.speed.toInt()}%  ·  F ${s.freq.toInt()}s  ·  T${s.turret.toInt()}°',
-                style: tx(12, T.textMid)),
+            Row(children: [
+              if (isDeleted) ...[
+                Icon(Icons.warning_amber_rounded, color: T.red, size: 13),
+                const SizedBox(width: 4),
+              ],
+              Expanded(child: Text(s.name,
+                  style: tx(16, isDeleted ? T.red : T.textHi,
+                      w: FontWeight.w600))),
+            ]),
+            if (isDeleted)
+              Text('Mode no longer exists — remove or replace',
+                  style: tx(10, T.red.withOpacity(0.7)))
+            else
+              Text('SPD ${s.speed.toInt()}%  ·  F ${s.freq.toInt()}s  ·  T${s.turret.toInt()}°',
+                  style: tx(12, T.textMid)),
           ])),
+          // Replace button for deleted modes
+          if (isDeleted) ...[
+            GestureDetector(
+              onTap: () => _showReplaceDeletedDialog(i),
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                decoration: BoxDecoration(
+                  color: T.amberDim,
+                  borderRadius: BorderRadius.circular(5),
+                  border: Border.all(color: T.amber.withOpacity(0.4)),
+                ),
+                child: Text('REPLACE', style: tx(9, T.amber, w: FontWeight.w700)),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
           GestureDetector(
             onTap: () { _stopAll(); setState(() => seqList.removeAt(i)); },
             child: Container(
@@ -752,6 +971,36 @@ class _MainPageState extends State<MainPage> {
         ]),
       ),
     );
+  }
+
+  void _showReplaceDeletedDialog(int index) {
+    final avail = saved.where((s) => s.id != 'new_mode').toList();
+    if (avail.isEmpty) {
+      _info('No Saved Modes', 'Go to Custom and save a mode first.');
+      return;
+    }
+    showDialog(context: context, builder: (_) => _dlg(
+      title: 'REPLACE WITH',
+      body: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: avail.length,
+          itemBuilder: (_, i) => ListTile(
+            title: Text(avail[i].name, style: tx(20, T.textHi)),
+            subtitle: Text(
+                'SPD ${avail[i].speed.toInt()}%  ·  FREQ ${avail[i].freq.toInt()}s',
+                style: tx(13, T.textMid)),
+            onTap: () {
+              setState(() => seqList[index] = avail[i]);
+              Navigator.pop(context);
+            },
+          ),
+        ),
+      ),
+      actions: [_dBtn('Cancel', T.textMid, () => Navigator.pop(context))],
+    ));
+  }
 
   void _showAddSeqDialog() {
     final avail = saved.where((s) => s.id != 'new_mode').toList();
@@ -767,15 +1016,119 @@ class _MainPageState extends State<MainPage> {
           shrinkWrap: true,
           itemCount: avail.length,
           itemBuilder: (_, i) => ListTile(
-            title: Text(avail[i].name, style: tx(13, T.textHi)),
+            title: Text(avail[i].name, style: tx(20, T.textHi)),
             subtitle: Text(
                 'SPD ${avail[i].speed.toInt()}%  ·  FREQ ${avail[i].freq.toInt()}s',
-                style: tx(10, T.textMid)),
+                style: tx(13, T.textMid)),
             onTap: () { setState(() => seqList.add(avail[i])); Navigator.pop(context); },
           ),
         ),
       ),
       actions: [_dBtn('Cancel', T.textMid, () => Navigator.pop(context))],
+    ));
+  }
+
+  // ── Saved Sequence CRUD ────────────────────────────────────────
+  void _saveNewSeq() {
+    final ctrl = TextEditingController();
+    showDialog(context: context, builder: (_) => _dlg(
+      title: 'SAVE SEQUENCE AS',
+      body: _textField(ctrl, T.amber),
+      actions: [
+        _dBtn('Cancel', T.textMid, () => Navigator.pop(context)),
+        _dBtn('Save', T.amber, () {
+          final t = ctrl.text.trim();
+          if (t.isEmpty) return;
+          if (savedSeqs.any((sq) => sq.name.toLowerCase() == t.toLowerCase())) {
+            Navigator.pop(context);
+            _info('Name In Use', '"$t" already exists.');
+            return;
+          }
+          setState(() {
+            final nq = SavedSequence(
+              id:      DateTime.now().millisecondsSinceEpoch.toString(),
+              name:    t,
+              modeIds: seqList.map((s) => s.id).toList(),
+              dir:     seqDir,
+              timing:  timing,
+              gFreq:   gFreq,
+            );
+            savedSeqs.add(nq);
+            curSavedSeq = nq;
+          });
+          _savePrefs();
+          Navigator.pop(context);
+        }),
+      ],
+    ));
+  }
+
+  void _updateSavedSeq() {
+    if (curSavedSeq == null) {
+      _info('No Sequence Selected', 'Use "Save New" to create a sequence first.');
+      return;
+    }
+    setState(() {
+      curSavedSeq!.modeIds = seqList.map((s) => s.id).toList();
+      curSavedSeq!.dir     = seqDir;
+      curSavedSeq!.timing  = timing;
+      curSavedSeq!.gFreq   = gFreq;
+    });
+    _savePrefs();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('"${curSavedSeq!.name}" updated.', style: tx(12, Colors.white)),
+      duration: const Duration(milliseconds: 1200),
+      backgroundColor: T.green,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ));
+  }
+
+  void _renameSavedSeq() {
+    if (curSavedSeq == null) {
+      _info("Can't Rename", 'Select a saved sequence first.');
+      return;
+    }
+    final ctrl = TextEditingController(text: curSavedSeq!.name);
+    showDialog(context: context, builder: (_) => _dlg(
+      title: 'RENAME SEQUENCE',
+      body: _textField(ctrl, T.cyan),
+      actions: [
+        _dBtn('Cancel', T.textMid, () => Navigator.pop(context)),
+        _dBtn('Rename', T.cyan, () {
+          final t = ctrl.text.trim();
+          if (t.isEmpty) return;
+          if (savedSeqs.any((sq) => sq.name.toLowerCase() == t.toLowerCase()
+              && sq.id != curSavedSeq!.id)) {
+            Navigator.pop(context);
+            _info('Name In Use', '"$t" already exists.');
+            return;
+          }
+          setState(() => curSavedSeq!.name = t);
+          _savePrefs();
+          Navigator.pop(context);
+        }),
+      ],
+    ));
+  }
+
+  void _deleteSavedSeq() {
+    if (curSavedSeq == null) return;
+    showDialog(context: context, builder: (_) => _dlg(
+      title: 'DELETE SEQUENCE',
+      body: Text('Delete "${curSavedSeq!.name}"? This cannot be undone.',
+          style: tx(12, T.textMid)),
+      actions: [
+        _dBtn('Cancel', T.textMid, () => Navigator.pop(context)),
+        _dBtn('Delete', T.red, () {
+          setState(() {
+            savedSeqs.removeWhere((sq) => sq.id == curSavedSeq!.id);
+            curSavedSeq = null;
+          });
+          _savePrefs();
+          Navigator.pop(context);
+        }),
+      ],
     ));
   }
 
@@ -820,7 +1173,7 @@ class _MainPageState extends State<MainPage> {
           ),
           child: Column(children: [
             Text(label, textAlign: TextAlign.center,
-                style: tx(13  , a ? T.amber : T.textMid, w: FontWeight.w700)),
+                style: tx(13, a ? T.amber : T.textMid, w: FontWeight.w700)),
             const SizedBox(height: 2),
             Text(sub, textAlign: TextAlign.center,
                 style: tx(11, a ? T.amber.withOpacity(0.6) : T.textLo)),
@@ -966,7 +1319,7 @@ class _MainPageState extends State<MainPage> {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // SAVE / RENAME / DELETE
+  // SAVE / RENAME / DELETE (Custom mode)
   // ─────────────────────────────────────────────────────────────
   void _saveNew() {
     final ctrl = TextEditingController();
@@ -992,7 +1345,7 @@ class _MainPageState extends State<MainPage> {
             saved.add(np);
             curCustom = np;
           });
-          _savePrefs(); 
+          _savePrefs();
           Navigator.pop(context);
         }),
       ],
@@ -1005,6 +1358,7 @@ class _MainPageState extends State<MainPage> {
       return;
     }
     setState(() {});
+    _savePrefs();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('"${curCustom.name}" saved.', style: tx(12, Colors.white)),
       duration: const Duration(milliseconds: 1200),
@@ -1042,18 +1396,60 @@ class _MainPageState extends State<MainPage> {
 
   void _deleteMode() {
     if (curCustom.id == 'new_mode') return;
+
+    // Check if this mode is used in any saved sequence
+    final affectedSeqs = savedSeqs
+        .where((sq) => sq.modeIds.contains(curCustom.id))
+        .map((sq) => sq.name)
+        .toList();
+
+    // Also check the active seqList
+    final inActiveSeq = seqList.any((s) => s.id == curCustom.id);
+
+    final hasRefs = affectedSeqs.isNotEmpty || inActiveSeq;
+
     showDialog(context: context, builder: (_) => _dlg(
       title: 'DELETE MODE',
-      body: Text('Delete "${curCustom.name}"? This cannot be undone.',
-          style: tx(12, T.textMid)),
+      body: Column(mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('Delete "${curCustom.name}"? This cannot be undone.',
+            style: tx(12, T.textMid)),
+        if (hasRefs) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: T.warnDim,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: T.warn.withOpacity(0.5)),
+            ),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Icon(Icons.warning_amber_rounded, color: T.warn, size: 14),
+                const SizedBox(width: 6),
+                Text('Used in sequences', style: tx(11, T.warn, w: FontWeight.w700)),
+              ]),
+              const SizedBox(height: 4),
+              if (inActiveSeq)
+                Text('· Current sequence (unsaved)', style: tx(11, T.warn)),
+              ...affectedSeqs.map((n) => Text('· $n', style: tx(11, T.warn))),
+              const SizedBox(height: 4),
+              Text('Those entries will be marked as [DELETED].',
+                  style: tx(10, T.warn.withOpacity(0.7))),
+            ]),
+          ),
+        ],
+      ]),
       actions: [
         _dBtn('Cancel', T.textMid, () => Navigator.pop(context)),
         _dBtn('Delete', T.red, () {
           setState(() {
             seqList.removeWhere((s) => s.id == curCustom.id);
             saved.removeWhere((s) => s.id == curCustom.id);
+            // Note: savedSeqs keep the id in modeIds — they'll show as [DELETED]
             curCustom = _newTpl;
           });
+          _savePrefs();
           Navigator.pop(context);
         }),
       ],
@@ -1111,11 +1507,11 @@ class _MainPageState extends State<MainPage> {
             () => setState(() => clearGridFlash = false));
       }, accent: T.red, accentBg: T.redDim),
       const SizedBox(width: 8),
-      _Pill('1-8,8-1', patternSel == '1-8,8-1',
-          () { _stopAll(); setState(() => patternSel = '1-8,8-1'); }),
+      _Pill('1-8|8-1', patternSel == '1-8|8-1',
+          () { _stopAll(); setState(() => patternSel = '1-8|8-1'); }),
       const SizedBox(width: 8),
-      _Pill('1-8,1-8', patternSel == '1-8,1-8',
-          () { _stopAll(); setState(() => patternSel = '1-8,1-8'); }),
+      _Pill('1-8|1-8', patternSel == '1-8|1-8',
+          () { _stopAll(); setState(() => patternSel = '1-8|1-8'); }),
     ],
   );
 
@@ -1142,7 +1538,6 @@ class _MainPageState extends State<MainPage> {
     final canStart = _startAllowed;
     final inDelay  = delaySeconds != null;
 
-    // Countdown label with 2 decimal places
     String startLabel;
     Color  startFg;
     Color  startBg;
@@ -1183,7 +1578,7 @@ class _MainPageState extends State<MainPage> {
           onTap: canStart && !inDelay ? _startMachine : null,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: 10),
             decoration: BoxDecoration(
               color: startBg,
               borderRadius: BorderRadius.circular(8),
@@ -1194,7 +1589,7 @@ class _MainPageState extends State<MainPage> {
             ),
             alignment: Alignment.center,
             child: Text(startLabel,
-                style: tx(inDelay ? 22 : 16, startFg,
+                style: tx(inDelay ? 22 : 26, startFg,
                     w: FontWeight.w700, ls: inDelay ? 0 : 3.0)),
           ),
         )),
@@ -1203,7 +1598,7 @@ class _MainPageState extends State<MainPage> {
           onTap: () { _stopAll(); setState(() {}); },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: 10),
             decoration: BoxDecoration(
               color: (!running && !inDelay) ? T.redDim : T.raised,
               borderRadius: BorderRadius.circular(8),
@@ -1217,7 +1612,7 @@ class _MainPageState extends State<MainPage> {
             ),
             alignment: Alignment.center,
             child: Text('STOP',
-                style: tx(16,
+                style: tx(26,
                     (!running && !inDelay) ? T.red : T.textLo,
                     w: FontWeight.w700, ls: 3.0)),
           ),
@@ -1227,7 +1622,7 @@ class _MainPageState extends State<MainPage> {
   }
 
   // ─────────────────────────────────────────────────────────────
-  // COURT
+  // COURT — new warm slate + clay scheme
   // ─────────────────────────────────────────────────────────────
   Widget _court({required List<String> sel, required bool numbered}) {
     const pad = 20.0, hit = 58.0;
@@ -1238,36 +1633,71 @@ class _MainPageState extends State<MainPage> {
       width: w, height: h,
       decoration: BoxDecoration(
         color: T.courtMain,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: T.border, width: 1.5),
-        boxShadow: const [BoxShadow(color: T.shadow, blurRadius: 10)],
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: T.courtLine, width: 2),
+        boxShadow: [
+          const BoxShadow(color: T.shadow, blurRadius: 12),
+          // Subtle inner glow to separate court from app bg
+          BoxShadow(
+              color: T.courtLine.withOpacity(0.08),
+              blurRadius: 0, spreadRadius: -1),
+        ],
       ),
-      child: LayoutBuilder(builder: (ctx, c) {
-        final kitchen = c.maxHeight * (7 / 44) - 20;
-        return Column(children: [
-          Expanded(child: Stack(clipBehavior: Clip.none, children: [
-            Positioned(bottom: 0, left: 0, right: 0, height: kitchen,
-                child: Container(
-                    decoration: BoxDecoration(
-                      color: T.courtKitchen,
-                      border: Border(top: BorderSide(color: T.divider)),
-                    ))),
-            _topGrid(c, pad, hit, kitchen),
-          ])),
-          Container(height: 1.5,
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(colors: [T.net, T.net]))),
-          Expanded(child: Stack(children: [
-            Positioned(top: 0, left: 0, right: 0, height: kitchen,
-                child: Container(
-                    decoration: BoxDecoration(
-                      color: T.courtKitchen,
-                      border: Border(bottom: BorderSide(color: T.divider)),
-                    ))),
-            _botGrid(c, pad, hit, kitchen, sel, numbered),
-          ])),
-        ]);
-      }),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(9),
+        child: LayoutBuilder(builder: (ctx, c) {
+          final kitchen = c.maxHeight * (7 / 44) - 20;
+          return Column(children: [
+            Expanded(child: Stack(clipBehavior: Clip.none, children: [
+              // Kitchen strip (top half)
+              Positioned(bottom: 0, left: 0, right: 0, height: kitchen,
+                  child: Container(
+                      decoration: BoxDecoration(
+                        color: T.courtKitchen,
+                        border: Border(
+                            top: BorderSide(color: T.courtLine.withOpacity(0.6), width: 1)),
+                      ))),
+              // Vertical centre line (top half)
+              // Positioned(
+              //   left: c.maxWidth / 2 - 0.5, top: 0, bottom: 0, width: 1,
+              //   child: Container(color: T.courtLine.withOpacity(0.35)),
+              // ),
+              _topGrid(c, pad, hit, kitchen),
+            ])),
+            // Net bar
+            Container(
+              height: 3,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(colors: [
+                  T.net,
+                  T.net,
+                  T.net,
+                  T.net,
+                ]),
+                boxShadow: [
+                  BoxShadow(color: T.net.withOpacity(0.25), blurRadius: 8),
+                ],
+              ),
+            ),
+            Expanded(child: Stack(children: [
+              // Kitchen strip (bottom half)
+              Positioned(top: 0, left: 0, right: 0, height: kitchen,
+                  child: Container(
+                      decoration: BoxDecoration(
+                        color: T.courtKitchen,
+                        border: Border(
+                            bottom: BorderSide(color: T.courtLine.withOpacity(0.6), width: 1)),
+                      ))),
+              // Vertical centre line (bottom half)
+              // Positioned(
+              //   left: c.maxWidth / 2 - 0.5, top: kitchen, bottom: 0, width: 1,
+              //   child: Container(color: T.courtLine.withOpacity(0.35)),
+              // ),
+              _botGrid(c, pad, hit, kitchen, sel, numbered),
+            ])),
+          ]);
+        }),
+      ),
     );
   }
 
@@ -1275,7 +1705,7 @@ class _MainPageState extends State<MainPage> {
   Widget _topGrid(BoxConstraints c, double pad, double hit, double kitchen) {
     final uH = c.maxHeight / 2 - kitchen - pad * 2;
     final uW = c.maxWidth - pad * 2;
-    return Stack(clipBehavior: Clip.none,  children: [
+    return Stack(clipBehavior: Clip.none, children: [
       for (int r = 0; r < kTopSize; r++)
         for (int col = 0; col < kTopSize; col++)
           Positioned(
@@ -1285,17 +1715,21 @@ class _MainPageState extends State<MainPage> {
               onTap: () { _stopAll(); setState(() { topRow = r; topCol = col; }); },
               child: Container(
                 width: hit, height: hit,
-                color: Colors.transparent,  // ← only change needed, only in _topGrid
+                color: Colors.transparent,
                 alignment: Alignment.center,
                 child: Container(
                   width: 30, height: 30,
-                  decoration: const BoxDecoration(
-                      shape: BoxShape.circle, color: T.dotOff),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: T.dotOff,
+                    border: Border.all(
+                        color: T.courtLine.withOpacity(0.5), width: 1),
+                  ),
                 ),
               ),
             ),
           ),
-      // ── Machine position: crosshair / target reticle ──
+      // Machine position: crosshair / target reticle
       Positioned(
         left: pad + topCol * (uW / (kTopSize - 1)) - 16,
         top:  pad + topRow * (uH / (kTopSize - 1)) - 16,
@@ -1310,18 +1744,16 @@ class _MainPageState extends State<MainPage> {
     final uH = c.maxHeight / 2 - kitchen - pad * 2;
     final uW = c.maxWidth - pad * 2;
 
-String? keyAt(Offset local) {
-  final col = ((local.dx - pad) / (uW / (kBotCols - 1))).round();
-  // Row 0 lives in the kitchen strip
-  // Rows 1-5 live in the play area
-  if (local.dy >= 0 && local.dy < kitchen) {
-    if (col >= 0 && col < kBotCols) return '$col,0';
-    return null;
-  }
-  final row = ((local.dy - pad - kitchen) / (uH / (kBotRows - 2))).round() + 1;
-  if (row < 1 || row >= kBotRows || col < 0 || col >= kBotCols) return null;
-  return '$col,$row';
-}
+    String? keyAt(Offset local) {
+      final col = ((local.dx - pad) / (uW / (kBotCols - 1))).round();
+      if (local.dy >= 0 && local.dy < kitchen) {
+        if (col >= 0 && col < kBotCols) return '$col,0';
+        return null;
+      }
+      final row = ((local.dy - pad - kitchen) / (uH / (kBotRows - 2))).round() + 1;
+      if (row < 1 || row >= kBotRows || col < 0 || col >= kBotCols) return null;
+      return '$col,$row';
+    }
 
     void touch(String key) {
       if (_dragSeen.contains(key)) return;
@@ -1347,10 +1779,8 @@ String? keyAt(Offset local) {
       },
       onPanEnd: (_) { _dragSeen.clear(); _dragErase = null; },
       child: Stack(children: [
-        // Row 0: kitchen strip
         for (int col = 0; col < kBotCols; col++)
           _botCell(0, col, uW, uH, pad, hit, kitchen, sel, numbered, inKitchen: true),
-        // Rows 1-5: play area
         for (int r = 1; r < kBotRows; r++)
           for (int col = 0; col < kBotCols; col++)
             _botCell(r, col, uW, uH, pad, hit, kitchen, sel, numbered, inKitchen: false),
@@ -1358,97 +1788,59 @@ String? keyAt(Offset local) {
     );
   }
 
-  Widget _kitchenCell(int col, double uW, double pad, double kitchen,
-      List<String> sel, bool numbered) {
-    final key  = 'k$col';
-    final idx  = sel.indexOf(key);
-    final on   = idx >= 0;
-    final color= mode == AppMode.random ? T.rDotOn : T.dotOn;
-    const dotD = 18.0;
-    const hitD = 46.0;
+  Widget _botCell(int r, int col, double w, double h,
+      double pad, double hit, double kitchen,
+      List<String> sel, bool numbered, {required bool inKitchen}) {
+    final key   = '$col,$r';
+    final idx   = sel.indexOf(key);
+    final on    = idx >= 0;
+    final color = mode == AppMode.random ? T.rDotOn : T.dotOn;
 
-    // Position in the middle of the kitchen strip
-    final x = pad + col * (uW / (kBotCols - 1));
-    final y = kitchen / 2;
+    // Kitchen dots use a slightly warmer off color
+    final offColor = inKitchen ? T.dotOff : T.dotOff;
+
+    final double top = inKitchen
+        ? kitchen / 1.5
+        : pad + kitchen + (r - 1) * (h / (kBotRows - 2));
 
     return Positioned(
-      left: x - hitD / 2,
-      top:  y - hitD / 2,
+      left: pad + col * (w / (kBotCols - 1)) - hit / 2,
+      top:  top - hit / 2,
       child: GestureDetector(
         onTap: () {
           _stopAll();
           setState(() { if (sel.contains(key)) sel.remove(key); else sel.add(key); });
         },
         child: Container(
-          width: hitD, height: hitD, alignment: Alignment.center,
+          width: hit, height: hit, alignment: Alignment.center,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 130),
-            width: dotD, height: dotD,
+            width: 28, height: 28,
             alignment: Alignment.center,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: on ? color : T.kitchenDot,
+              color: on ? color : offColor,
               border: Border.all(
-                  color: on ? color.withOpacity(0.7) : T.border.withOpacity(0.5),
-                  width: 1),
+                color: on
+                    ? color.withOpacity(0.5)
+                    : (inKitchen
+                        ? const Color.fromARGB(255, 33, 43, 63).withOpacity(0.5)
+                        : T.courtLine.withOpacity(0.4)),
+                width: 1,
+              ),
               boxShadow: on
-                  ? [BoxShadow(color: color.withOpacity(0.4), blurRadius: 6, spreadRadius: 1)]
+                  ? [BoxShadow(color: color.withOpacity(0.50), blurRadius: 10, spreadRadius: 1)]
                   : null,
             ),
             child: (numbered && on)
                 ? Text('${idx + 1}',
-                    style: tx(8, Colors.black.withOpacity(0.8), w: FontWeight.w800))
+                    style: tx(14, Colors.black.withOpacity(0.85), w: FontWeight.w800))
                 : null,
           ),
         ),
       ),
     );
   }
-
-Widget _botCell(int r, int col, double w, double h,
-    double pad, double hit, double kitchen,
-    List<String> sel, bool numbered, {required bool inKitchen}) {
-  final key   = '$col,$r';
-  final idx   = sel.indexOf(key);
-  final on    = idx >= 0;
-  final color = mode == AppMode.random ? T.rDotOn : T.dotOn;
-
-  // Row 0 centers vertically in the kitchen strip
-  // Rows 1-5 distribute across the play area
-  final double top = inKitchen
-      ? kitchen / 1.5  // center of kitchen strip
-      : pad + kitchen + (r - 1) * (h / (kBotRows - 2));
-
-  return Positioned(
-    left: pad + col * (w / (kBotCols - 1)) - hit / 2,
-    top:  top - hit / 2,
-    child: GestureDetector(
-      onTap: () {
-        _stopAll();
-        setState(() { if (sel.contains(key)) sel.remove(key); else sel.add(key); });
-      },
-      child: Container(
-        width: hit, height: hit, alignment: Alignment.center,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 130),
-          width: 28, height: 28,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: on ? color : T.dotOff,
-            boxShadow: on
-                ? [BoxShadow(color: color.withOpacity(0.45), blurRadius: 8, spreadRadius: 1)]
-                : null,
-          ),
-          child: (numbered && on)
-              ? Text('${idx + 1}',
-                  style: tx(9, Colors.black.withOpacity(0.85), w: FontWeight.w800))
-              : null,
-        ),
-      ),
-    ),
-  );
-}
 
   // ─────────────────────────────────────────────────────────────
   // DEBUG MODE
@@ -1517,6 +1909,7 @@ Widget _botCell(int r, int col, double w, double h,
           kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),
         ]),
         section('SEQ', T.violet, [
+          kv('Saved seq', curSavedSeq?.name ?? 'Unsaved'),
           kv('Direction', _dirLabel(seqDir)),
           kv('Timing', timing == TimingMode.perShot
               ? 'Per-shot' : 'Global ${gFreq.toInt()}s'),
@@ -1525,6 +1918,8 @@ Widget _botCell(int r, int col, double w, double h,
           kv('Playback', eff.isEmpty ? 'Empty'
               : eff.map((s) => s.name).join(' → ')),
           kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),
+          kv('Saved seqs', savedSeqs.isEmpty ? 'None'
+              : savedSeqs.map((sq) => sq.name).join(', ')),
           if (eff.isNotEmpty) ...[
             const SizedBox(height: 4),
             ...eff.asMap().entries.map((e) {
@@ -1589,23 +1984,13 @@ class _CrosshairPainter extends CustomPainter {
       ..color = color
       ..style = PaintingStyle.fill;
 
-    // Outer circle
     canvas.drawCircle(Offset(cx, cy), r * 0.88, paint);
-
-    // Inner circle (small)
     canvas.drawCircle(Offset(cx, cy), r * 0.22, paint);
-
-    // Center dot
     canvas.drawCircle(Offset(cx, cy), r * 0.08, dotPaint);
 
-    // Crosshair lines — gaps around center
-    // Top
     canvas.drawLine(Offset(cx, cy - gap), Offset(cx, cy - gap - lineLen), paint);
-    // Bottom
     canvas.drawLine(Offset(cx, cy + gap), Offset(cx, cy + gap + lineLen), paint);
-    // Left
     canvas.drawLine(Offset(cx - gap, cy), Offset(cx - gap - lineLen, cy), paint);
-    // Right
     canvas.drawLine(Offset(cx + gap, cy), Offset(cx + gap + lineLen, cy), paint);
   }
 
