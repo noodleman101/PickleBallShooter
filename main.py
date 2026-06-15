@@ -5,7 +5,7 @@ from micropython import const
 import time
 import jsonHandler as jh
 import bluetoothHandler as bt
-import motor
+import motors
 from picozero import pico_led
 
 shooterLower = motors.ShooterMotor(shooterPWM = 27, shooterEN = 28)

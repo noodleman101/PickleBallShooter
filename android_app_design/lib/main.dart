@@ -1601,7 +1601,9 @@ class _MainPageState extends State<MainPage> {
       Slider(min: 0, max: 25, divisions: 25,
         value: numBalls.toDouble(),
         activeColor: T.cyan, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => numBalls = v.round()); }),
+        onChanged: (v) { _stopAll(); setState(() => numBalls = v.round()); },
+        onChangeEnd: (_) => sendJson(compileInformation()),
+        ),
     );
   }
 
