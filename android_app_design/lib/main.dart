@@ -1,8 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 
 void main() => runApp(const MyApp());
+
+// UUIDs — MUST match Pico
+const serviceUuid = "fe1dcbe3-4f5e-4e98-bcaf-8ab7731a731a";
+const charUuid    = "fe1dcbe3-4f5e-4e98-bcaf-8ab7731a731b";
 
 enum AppMode { grid, custom, random, seq, debug, settings }
 enum SequenceDirection { topToBottom, bottomToTop }
@@ -27,7 +35,7 @@ class MachineSettings {
   });
 
   @override
-  bool operator ==(Object o) =>
+  bool operator == (Object o) =>
       identical(this, o) || (o is MachineSettings && id == o.id);
   @override
   int get hashCode => id.hashCode;
@@ -119,7 +127,7 @@ BoxDecoration _card({Color? border, Color? bg, Color? glow}) => BoxDecoration(
       borderRadius: BorderRadius.circular(10),
       border: Border.all(color: border ?? T.border, width: 1),
       boxShadow: glow != null
-          ? [BoxShadow(color: glow.withOpacity(0.12), blurRadius: 16, spreadRadius: 0)]
+          ? [BoxShadow(color: glow.withAlpha(31), blurRadius: 16, spreadRadius: 0)]
           : [const BoxShadow(color: T.shadow, blurRadius: 6, offset: Offset(0, 2))],
     );
 
@@ -132,13 +140,11 @@ class _Pill extends StatelessWidget {
   final VoidCallback onTap;
   final Color accent;
   final Color accentBg;
-  final double fontSize;
   final EdgeInsets padding;
 
   const _Pill(this.text, this.active, this.onTap, {
     this.accent   = T.cyan,
     this.accentBg = T.cyanDim,
-    this.fontSize = 14,
     this.padding  = const EdgeInsets.symmetric(vertical: 8, horizontal: 14),
   });
 
@@ -152,10 +158,10 @@ class _Pill extends StatelessWidget {
             color: active ? accentBg : T.raised,
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
-                color: active ? accent.withOpacity(0.5) : T.border, width: 1),
+                color: active ? accent.withAlpha(128) : T.border, width: 1),
           ),
           child: Text(text,
-              style: tx(fontSize, active ? accent : T.textMid,
+              style: tx(14, active ? accent : T.textMid,
                   w: FontWeight.w700, ls: 0.5)),
         ),
       );
@@ -172,7 +178,7 @@ class _Sheet extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: padding ?? const EdgeInsets.all(12),
         decoration: _card(
-            border: accent?.withOpacity(0.2) ?? T.border,
+            border: accent?.withAlpha(51) ?? T.border,
             glow: accent),
         child: child,
       );
@@ -197,7 +203,7 @@ class MyApp extends StatelessWidget {
             thumbColor: Colors.white,
             activeTickMarkColor: Colors.transparent,
             inactiveTickMarkColor: Colors.transparent,
-            overlayColor: T.cyan.withOpacity(0.10),
+            overlayColor: T.cyan.withAlpha(26),
             activeTrackColor: T.cyan,
             inactiveTrackColor: T.border,
           ),
@@ -348,7 +354,6 @@ class _MainPageState extends State<MainPage> {
 
   AppMode mode = AppMode.grid;
 
-  bool connected = false;
   bool running   = false;
 
   bool clearGridFlash = false;
@@ -401,6 +406,259 @@ class _MainPageState extends State<MainPage> {
   Timer?  _ballTimer;
   Timer?  _delayTicker;
 
+  // ----------------- BLUETOOTH ----------------------
+  BluetoothDevice? device;
+  BluetoothCharacteristic? jsonChar;
+  StreamSubscription<List<ScanResult>>? scanSub;
+
+  bool isConnecting = false;
+  bool isConnected = false;
+
+  // ---------------- Permission Handling ------------------
+  Future<bool> requestBlePermissions() async {
+    debugPrint("Requesting BLE permissions...");
+
+    // Android 12+ (API 31+): use BLUETOOTH_SCAN + BLUETOOTH_CONNECT only
+    // Android < 12: needs ACCESS_FINE_LOCATION
+    final androidInfo = await DeviceInfoPlugin().androidInfo;
+    final sdkInt = androidInfo.version.sdkInt;
+
+    if (sdkInt >= 31) {
+      // Android 12+ — no location permission needed for BLE if
+      // neverForLocation flag is set in manifest
+      final statuses = await [
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+
+      final allGranted = statuses.values.every((s) => s.isGranted);
+      if (!allGranted) {
+        debugPrint("❌ BLE permissions denied: $statuses");
+        return false;
+      }
+    } else {
+      // Android < 12 — location is required for BLE scanning
+      final statuses = await [
+        Permission.location,
+        Permission.bluetoothScan,
+        Permission.bluetoothConnect,
+      ].request();
+
+      final allGranted = statuses.values.every((s) => s.isGranted);
+      if (!allGranted) {
+        debugPrint("❌ Permissions denied: $statuses");
+        return false;
+      }
+    }
+
+    debugPrint("✅ All BLE permissions granted");
+    return true;
+  }
+
+  // ---------------- Connecting -------------------
+  Future<void> connect() async {
+    _stopAll();
+    if (isConnecting || isConnected) return;
+    setState(() => isConnecting = true);
+    debugPrint("Starting BLE scan...");
+
+    final ok = await requestBlePermissions();
+    if (!ok) {
+      debugPrint("Cannot scan without permissions");
+      return;
+    }
+
+    // Start scan — no timeout for now
+    await FlutterBluePlus.startScan(
+      withServices: [Guid(serviceUuid)], // <-- filter by service UUID
+    );
+
+    // Listen for scan results
+    scanSub = FlutterBluePlus.scanResults.listen((results) async {
+      for (final r in results) {
+        debugPrint(
+          "Found device: name='${r.device.platformName}' "
+          "id=${r.device.remoteId} "
+          "services=${r.advertisementData.serviceUuids}"
+        );
+
+        // Check if the Pico service UUID is advertised
+        if (r.advertisementData.serviceUuids.contains(Guid(serviceUuid))) {
+          debugPrint("Pico found by service UUID! Stopping scan...");
+          await FlutterBluePlus.stopScan();
+          await scanSub?.cancel();
+          scanSub = null;
+
+          device = r.device;
+
+          try {
+            debugPrint("Connecting to Pico...");
+            await device!.connect(license: License.nonprofit);
+            debugPrint("Connected!");
+
+            connected();
+            
+            final services = await device!.discoverServices();
+            for (final s in services) {
+              if (s.uuid.toString() == serviceUuid) {
+                for (final c in s.characteristics) {
+                  if (c.uuid.toString() == charUuid) {
+                    jsonChar = c;
+                    isConnected = true;
+                    isConnecting = false;
+                    debugPrint("JSON characteristic ready!");
+                    setState(() {});
+                    priorSent = defaultJson;
+                    compileInformation();
+                    sendJson(priorSent);
+                    debugPrint("JSON sent");
+                    await device!.requestMtu(247);
+                    return;
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            debugPrint("Connection error: $e");
+            isConnecting = false;
+            setState(() {});
+          }
+        }
+      }
+    });
+
+    // Optional: scan timeout for debugging
+    Future.delayed(const Duration(seconds: 10), () async {
+      if (!isConnected && isConnecting) {
+        debugPrint("Scan timeout — device not found");
+        await FlutterBluePlus.stopScan();
+        await scanSub?.cancel();
+        scanSub = null;
+        isConnecting = false;
+        setState(() {});
+      }
+    });
+
+  }//End Connect
+
+  void connected() async {
+    while (true) {
+      if (device == null || !device!.isConnected) {
+        isConnected = false;
+        isConnecting = false;
+        setState(() {});
+        return;
+      }
+
+      await Future.delayed(Duration(seconds: 1));
+    }
+  }
+
+  void disconnect() async {
+    if (device==null) return;
+    _stopAll();
+    await device?.disconnect();
+    isConnected = false;
+    setState(() {});
+    return;
+  }
+
+
+  // --------------- JSON ------------------
+  Future<void> sendJson(Map<String, dynamic> data) async {
+    if (jsonChar == null) return;
+
+    if (device == null) return;
+    if (device!.isDisconnected) return;
+
+    final jsonString = jsonEncode(data) + ("\n");
+    debugPrint("Sending JSON: $jsonString");
+
+    final bytes = utf8.encode(jsonString);
+
+    const chunkSize = 16;
+
+    for (int i = 0; i < bytes.length; i += chunkSize) {
+      final chunk = bytes.sublist(
+        i,
+        (i + chunkSize).clamp(0, bytes.length),
+      );
+
+      if (jsonChar == null) return;
+      await jsonChar!.write(chunk, withoutResponse: false);
+      await Future.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+
+  // ---------------- Update -----------------
+  var defaultJson = <String, dynamic>{
+    "cm" : AppMode.grid.toString(),
+    "f" : 7,
+    "n" : 10,
+    "sp" : "Medium",
+    "sa" : 0,
+    "tr" : 0,
+    "tc" : 0,
+    "ts" : false,
+    "r" : false,
+    "cc" : {
+      "s" : 10,
+      "t" : 0,
+      "c" : 0,
+      "p" : 0,
+      "f" : 7,
+    },
+    "g" : {
+      "bso" : "[]",
+      "p" : "1-8,8-1"
+    },
+    "rbs" : "[]",
+  };
+  var priorSent = <String, dynamic>{};
+
+  Map<String,dynamic> compileInformation() {
+    if (!isConnected) return defaultJson;
+    final map = <String, dynamic>{};
+    if (priorSent["cm"] != mode.toString()) map["cm"] = mode.toString(); priorSent["cm"] = mode.toString();
+    if (priorSent["f"] != freq) map["f"] = freq; priorSent["f"] = freq;
+    if (priorSent["n"] != numBalls) map["n"] = numBalls; priorSent["n"] = numBalls;
+    if (priorSent["sp"] != speedSel) map["sp"] = speedSel; priorSent["sp"] = speedSel;
+    if (priorSent["sa"] != speedAdj) map["sa"] = speedAdj; priorSent["sa"] = speedAdj;
+    // if (priorSent["rbs"] != randomBottomSelection.toString()) map["rbs"] = randomBottomSelection.toString(); priorSent["rbs"] = randomBottomSelection.toString();
+    if (priorSent["tr"] != topRow) map["tr"] = topRow; priorSent["tr"] = topRow;
+    if (priorSent["tc"] != topCol) map["tc"] = topCol; priorSent["tc"] = topCol;
+    if (priorSent["ts"] != testShotFlash) map["ts"] = testShotFlash; priorSent["ts"] = testShotFlash;
+    if (priorSent["r"] != running) map["r"] = running; priorSent["r"] = running;
+    var s = priorSent["cc"]["s"] != curCustom.speed;
+    var t = priorSent["cc"]["t"] != curCustom.turret;
+    var c = priorSent["cc"]["c"] != curCustom.cowl;
+    var sp = priorSent["cc"]["p"] != curCustom.spin;
+    var f = priorSent["cc"]["f"] != curCustom.freq;
+    if (s || t || c || sp || f) {
+      map["cc"] = {};
+      if (s) map["cc"]["s"] = curCustom.speed.toInt(); priorSent["cc"]["s"] = curCustom.speed.toInt();
+      if (t) map["cc"]["t"] = curCustom.turret.toInt(); priorSent["cc"]["t"] = curCustom.turret.toInt();
+      if (c) map["cc"]["c"] = curCustom.cowl.toInt(); priorSent["cc"]["c"] = curCustom.cowl.toInt();
+      if (sp) map["cc"]["p"] = curCustom.spin.toInt(); priorSent["cc"]["p"] = curCustom.spin.toInt();
+      if (f) map["cc"]["f"] = curCustom.freq.toInt(); priorSent["cc"]["f"] = curCustom.freq.toInt();
+    }
+    // var bso = priorSent["g"]["bso"].toString() != bottomSelectionOrder.toString();
+    // var p = priorSent["g"]["p"] != pattern;
+    // if (bso || p) {
+      // map["g"] = {};
+      // if (bso) map["g"]["bso"] = bottomSelectionOrder.toString(); priorSent["g"]["bso"] = bottomSelectionOrder.toString();
+      // if (p) map["g"]["p"] = patternSel; priorSent["g"]["p"] = patternSel;
+    // }
+
+    return map;
+  }
+
+
+
+
+
+
   @override
   void initState() {
     super.initState();
@@ -427,7 +685,7 @@ class _MainPageState extends State<MainPage> {
     _delayTicker?.cancel();
     _ballTimer = _delayTicker = null;
     if (running || delaySeconds != null) {
-      setState(() { running = false; ballsLeft = null; delaySeconds = null; });
+      setState(() { running = false; ballsLeft = null; delaySeconds = null; sendJson(compileInformation());});
     }
   }
 
@@ -445,6 +703,7 @@ class _MainPageState extends State<MainPage> {
         running      = true;
         delaySeconds = null;
         ballsLeft    = unlimited ? null : numBalls;
+        sendJson(compileInformation());
       });
       if (!unlimited && showRunning && numBalls > 0) {
         _ballTimer = Timer.periodic(
@@ -533,7 +792,7 @@ class _MainPageState extends State<MainPage> {
           decoration: BoxDecoration(
             color: T.greenDim,
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: T.green.withOpacity(0.4)),
+            border: Border.all(color: T.green.withAlpha(102)),
           ),
           child: Text('RUNNING', style: tx(10, T.green, w: FontWeight.w700, ls: 3)),
         ),
@@ -549,40 +808,54 @@ class _MainPageState extends State<MainPage> {
       _connBtn(),
       const Spacer(),
       _iconBtn(Icons.settings_outlined, mode == AppMode.settings, T.textMid, () {
-        _stopAll(); setState(() => mode = AppMode.settings);
+        _stopAll(); setState(() {
+          mode = AppMode.settings;
+          sendJson(compileInformation());
+          });
       }),
       const SizedBox(width: 8),
       _iconBtn(Icons.bug_report_outlined, mode == AppMode.debug, T.amber, () {
-        _stopAll(); setState(() => mode = AppMode.debug);
+        _stopAll(); setState(() {
+          mode = AppMode.debug;
+          priorSent = defaultJson;
+          compileInformation();
+          sendJson(priorSent);
+        });
       }),
     ]),
   );
 
   Widget _connBtn() => GestureDetector(
-    onTap: () => setState(() => connected = !connected),
+    onTap: () {
+        if (isConnected || isConnecting) {
+          disconnect();
+        } else {
+          connect();
+        }
+      },
     child: AnimatedContainer(
       duration: const Duration(milliseconds: 180),
       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
       decoration: BoxDecoration(
-        color: connected ? T.greenDim : T.redDim,
+        color: isConnected ? T.greenDim : isConnecting ? T.amberDim : T.redDim,
         borderRadius: BorderRadius.circular(6),
         border: Border.all(
-            color: connected ? T.green.withOpacity(0.4) : T.red.withOpacity(0.4)),
+            color: isConnected ? T.green.withAlpha(102) : isConnecting ? T.amber.withAlpha(102) : T.red.withAlpha(102)),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
           width: 6, height: 6,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: connected ? T.green : T.red,
+            color: isConnected ? T.green : isConnecting ? T.amber : T.red,
             boxShadow: [BoxShadow(
-                color: (connected ? T.green : T.red).withOpacity(0.7),
+                color: (isConnected ? T.green : isConnecting ? T.amber : T.red).withAlpha(179),
                 blurRadius: 6)],
           ),
         ),
         const SizedBox(width: 8),
-        Text(connected ? 'CONNECTED' : 'DISCONNECTED',
-            style: tx(11, connected ? T.green : T.red, w: FontWeight.w700, ls: 0.8)),
+        Text(isConnected ? 'CONNECTED' : isConnecting ? 'CONNECTING' : 'DISCONNECTED',
+            style: tx(11, isConnected ? T.green : isConnecting ? T.amber : T.red, w: FontWeight.w700, ls: 0.8)),
       ]),
     ),
   );
@@ -594,9 +867,9 @@ class _MainPageState extends State<MainPage> {
           duration: const Duration(milliseconds: 140),
           width: 36, height: 36,
           decoration: BoxDecoration(
-            color: active ? color.withOpacity(0.10) : T.raised,
+            color: active ? color.withAlpha(26) : T.raised,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: active ? color.withOpacity(0.5) : T.border),
+            border: Border.all(color: active ? color.withAlpha(128) : T.border),
           ),
           child: Icon(icon, color: active ? color : T.textMid, size: 17),
         ),
@@ -608,7 +881,10 @@ class _MainPageState extends State<MainPage> {
       final active = mode == m;
       return Expanded(
         child: GestureDetector(
-          onTap: () { _stopAll(); setState(() => mode = m); },
+          onTap: () { _stopAll(); setState(() {
+            mode = m;
+            sendJson(compileInformation());
+          }); },
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 140),
             margin: const EdgeInsets.symmetric(horizontal: 2),
@@ -617,7 +893,7 @@ class _MainPageState extends State<MainPage> {
               color: active ? T.cyanDim : T.raised,
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                  color: active ? T.cyan.withOpacity(0.5) : T.border, width: 1),
+                  color: active ? T.cyan.withAlpha(128) : T.border, width: 1),
             ),
             alignment: Alignment.center,
             child: Text(label,
@@ -665,11 +941,13 @@ class _MainPageState extends State<MainPage> {
       const SizedBox(height: 8),
       _sliderSheet('SPEED ADJ', '${speedAdj.toInt()}', T.green, T.cyanDim,
         Slider(min: -5, max: 5, divisions: 10, value: speedAdj,
-          onChanged: (v) { _stopAll(); setState(() => speedAdj = v); }),
+          onChanged: (v) { _stopAll(); setState(() => speedAdj = v); },
+          onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _sliderSheet('FREQ', '${freq.toInt()}s', T.amber, T.amberDim,
         Slider(min: 3, max: 12, divisions: 9, value: freq,
-          onChanged: (v) { _stopAll(); setState(() => freq = v); }),
+          onChanged: (v) { _stopAll(); setState(() => freq = v); },
+          onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _ballsSheet(),
       const SizedBox(height: 20),
@@ -696,11 +974,13 @@ class _MainPageState extends State<MainPage> {
       const SizedBox(height: 8),
       _sliderSheet('SPEED ADJ', '${speedAdj.toInt()}', T.cyan, T.cyanDim,
         Slider(min: -5, max: 5, divisions: 10, value: speedAdj,
-          onChanged: (v) { _stopAll(); setState(() => speedAdj = v); }),
+          onChanged: (v) { _stopAll(); setState(() => speedAdj = v); },
+          onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _sliderSheet('FREQ', '${freq.toInt()}s', T.amber, T.amberDim,
         Slider(min: 3, max: 12, divisions: 9, value: freq,
-          onChanged: (v) { _stopAll(); setState(() => freq = v); }),
+          onChanged: (v) { _stopAll(); setState(() => freq = v); },
+          onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _ballsSheet(),
       const SizedBox(height: 20),
@@ -727,7 +1007,7 @@ class _MainPageState extends State<MainPage> {
             child: Text(s.name, style: tx(14, T.textHi)),
           )).toList(),
           onChanged: (s) {
-            if (s != null) { _stopAll(); setState(() => curCustom = s); }
+            if (s != null) { _stopAll(); setState(() {curCustom = s; sendJson(compileInformation());}); }
           },
         ),
       ),
@@ -739,9 +1019,9 @@ class _MainPageState extends State<MainPage> {
         _Pill('SAVE NEW', true, _saveNew, accent: T.amber, accentBg: T.amberDim),
         _Pill('RENAME', true, _renameMode, accent: T.cyan, accentBg: T.cyanDim),
         _Pill('TEST SHOT', testShotFlash, () {
-          setState(() => testShotFlash = true);
+          setState(() {testShotFlash = true; sendJson(compileInformation());});
           Future.delayed(const Duration(milliseconds: 150),
-              () => setState(() => testShotFlash = false));
+              () => setState(() {testShotFlash = false; sendJson(compileInformation());}));
         }, accent: T.violet, accentBg: T.violetDim),
         if (curCustom.id != 'new_mode')
           _Pill('DELETE', true, _deleteMode, accent: T.red, accentBg: T.redDim),
@@ -814,7 +1094,7 @@ class _MainPageState extends State<MainPage> {
           decoration: BoxDecoration(
             color: T.warnDim,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: T.warn.withOpacity(0.5)),
+            border: Border.all(color: T.warn.withAlpha(128)),
           ),
           child: Row(children: [
             Icon(Icons.warning_amber_rounded, color: T.warn, size: 18),
@@ -914,7 +1194,7 @@ class _MainPageState extends State<MainPage> {
               color: isDeleted ? T.redDim : T.cyanDim,
               shape: BoxShape.circle,
               border: Border.all(
-                  color: isDeleted ? T.red.withOpacity(0.4) : T.cyan.withOpacity(0.4)),
+                  color: isDeleted ? T.red.withAlpha(102) : T.cyan.withAlpha(102)),
             ),
             alignment: Alignment.center,
             child: Text('${i + 1}',
@@ -933,7 +1213,7 @@ class _MainPageState extends State<MainPage> {
             ]),
             if (isDeleted)
               Text('Mode no longer exists — remove or replace',
-                  style: tx(10, T.red.withOpacity(0.7)))
+                  style: tx(10, T.red.withAlpha(179)))
             else
               Text('SPD ${s.speed.toInt()}%  ·  F ${s.freq.toInt()}s  ·  T${s.turret.toInt()}°',
                   style: tx(12, T.textMid)),
@@ -947,7 +1227,7 @@ class _MainPageState extends State<MainPage> {
                 decoration: BoxDecoration(
                   color: T.amberDim,
                   borderRadius: BorderRadius.circular(5),
-                  border: Border.all(color: T.amber.withOpacity(0.4)),
+                  border: Border.all(color: T.amber.withAlpha(102)),
                 ),
                 child: Text('REPLACE', style: tx(9, T.amber, w: FontWeight.w700)),
               ),
@@ -961,7 +1241,7 @@ class _MainPageState extends State<MainPage> {
               decoration: BoxDecoration(
                 color: T.redDim,
                 borderRadius: BorderRadius.circular(5),
-                border: Border.all(color: T.red.withOpacity(0.3)),
+                border: Border.all(color: T.red.withAlpha(77)),
               ),
               child: Icon(Icons.close, color: T.red, size: 12),
             ),
@@ -1144,7 +1424,7 @@ class _MainPageState extends State<MainPage> {
           decoration: BoxDecoration(
             color: a ? T.cyanDim : T.raised,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: a ? T.cyan.withOpacity(0.5) : T.border),
+            border: Border.all(color: a ? T.cyan.withAlpha(128) : T.border),
           ),
           child: Text(label, textAlign: TextAlign.center,
               style: tx(14, a ? T.cyan : T.textMid, w: FontWeight.w700)),
@@ -1169,14 +1449,14 @@ class _MainPageState extends State<MainPage> {
           decoration: BoxDecoration(
             color: a ? T.amberDim : T.raised,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: a ? T.amber.withOpacity(0.5) : T.border),
+            border: Border.all(color: a ? T.amber.withAlpha(128) : T.border),
           ),
           child: Column(children: [
             Text(label, textAlign: TextAlign.center,
                 style: tx(13, a ? T.amber : T.textMid, w: FontWeight.w700)),
             const SizedBox(height: 2),
             Text(sub, textAlign: TextAlign.center,
-                style: tx(11, a ? T.amber.withOpacity(0.6) : T.textLo)),
+                style: tx(11, a ? T.amber.withAlpha(153) : T.textLo)),
           ]),
         ),
       ));
@@ -1215,7 +1495,7 @@ class _MainPageState extends State<MainPage> {
               decoration: BoxDecoration(
                 color: showRunning ? T.cyan : T.raised,
                 borderRadius: BorderRadius.circular(13),
-                border: Border.all(color: showRunning ? T.cyan.withOpacity(0.6) : T.border),
+                border: Border.all(color: showRunning ? T.cyan.withAlpha(153) : T.border),
               ),
               child: AnimatedAlign(
                 duration: const Duration(milliseconds: 200),
@@ -1253,28 +1533,35 @@ class _MainPageState extends State<MainPage> {
             } else { curCustom.speed = s; }
           });
         },
-        onChangeEnd: (_) { if (curCustom.speed == 80) speedUnlocked = true; },
+        onChangeEnd: (_) { if (curCustom.speed == 80) speedUnlocked = true; 
+          setState(() {
+            sendJson(compileInformation());
+          });},
       ),
     ),
     _sliderSheet('TURRET', '${curCustom.turret.toInt()}°', T.cyan, T.cyanDim,
       Slider(min: -20, max: 20, divisions: 40, value: curCustom.turret,
         activeColor: T.cyan, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.turret = v); }),
+        onChanged: (v) { _stopAll(); setState(() => curCustom.turret = v); },
+        onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
     _sliderSheet('COWL', '${curCustom.cowl.toInt()}°', T.violet, T.violetDim,
-      Slider(min: 0, max: 20, divisions: 20, value: curCustom.cowl,
+      Slider(min: 0, max: 25, divisions: 25, value: curCustom.cowl,
         activeColor: T.violet, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.cowl = v); }),
+        onChanged: (v) { _stopAll(); setState(() => curCustom.cowl = v); },
+        onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
     _sliderSheet('SPIN', '${curCustom.spin.toInt()}', T.green, T.greenDim,
       Slider(min: -10, max: 10, divisions: 20, value: curCustom.spin,
         activeColor: T.green, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.spin = v); }),
+        onChanged: (v) { _stopAll(); setState(() => curCustom.spin = v); },
+        onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
     _sliderSheet('FREQ', '${curCustom.freq.toInt()}s', T.amber, T.amberDim,
       Slider(min: 3, max: 12, divisions: 9, value: curCustom.freq,
         activeColor: T.amber, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.freq = v); }),
+        onChanged: (v) { _stopAll(); setState(() => curCustom.freq = v); },
+        onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
   ]);
 
@@ -1299,7 +1586,7 @@ class _MainPageState extends State<MainPage> {
           data: SliderTheme.of(context).copyWith(
             activeTrackColor: accent,
             thumbColor: Colors.white,
-            overlayColor: accent.withOpacity(0.10),
+            overlayColor: accent.withAlpha(26),
             inactiveTrackColor: T.border,
           ),
           child: slider,
@@ -1344,6 +1631,7 @@ class _MainPageState extends State<MainPage> {
             );
             saved.add(np);
             curCustom = np;
+            sendJson(compileInformation());
           });
           _savePrefs();
           Navigator.pop(context);
@@ -1387,7 +1675,7 @@ class _MainPageState extends State<MainPage> {
             _info('Name In Use', '"$t" already exists.');
             return;
           }
-          setState(() => curCustom.name = t);
+          setState(() {curCustom.name = t; sendJson(compileInformation());});
           Navigator.pop(context);
         }),
       ],
@@ -1421,7 +1709,7 @@ class _MainPageState extends State<MainPage> {
             decoration: BoxDecoration(
               color: T.warnDim,
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: T.warn.withOpacity(0.5)),
+              border: Border.all(color: T.warn.withAlpha(128)),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
@@ -1435,7 +1723,7 @@ class _MainPageState extends State<MainPage> {
               ...affectedSeqs.map((n) => Text('· $n', style: tx(11, T.warn))),
               const SizedBox(height: 4),
               Text('Those entries will be marked as [DELETED].',
-                  style: tx(10, T.warn.withOpacity(0.7))),
+                  style: tx(10, T.warn.withAlpha(179))),
             ]),
           ),
         ],
@@ -1447,7 +1735,7 @@ class _MainPageState extends State<MainPage> {
             seqList.removeWhere((s) => s.id == curCustom.id);
             saved.removeWhere((s) => s.id == curCustom.id);
             // Note: savedSeqs keep the id in modeIds — they'll show as [DELETED]
-            curCustom = _newTpl;
+            curCustom = _newTpl; sendJson(compileInformation());
           });
           _savePrefs();
           Navigator.pop(context);
@@ -1521,13 +1809,13 @@ class _MainPageState extends State<MainPage> {
       Text('SPEED:', style: tx(15, T.textMid, w: FontWeight.w700, ls: 0.8)),
       const SizedBox(width: 10),
       _Pill('SLOW', speedSel == 'Slow',
-          () { _stopAll(); setState(() => speedSel = 'Slow'); }),
+          () { _stopAll(); setState(() {speedSel = 'Slow'; sendJson(compileInformation());});}),
       const SizedBox(width: 6),
       _Pill('MED', speedSel == 'Medium',
-          () { _stopAll(); setState(() => speedSel = 'Medium'); }),
+          () { _stopAll(); setState(() { speedSel = 'Medium'; sendJson(compileInformation());}); }),
       const SizedBox(width: 6),
       _Pill('FAST', speedSel == 'Fast',
-          () { _stopAll(); setState(() => speedSel = 'Fast'); }),
+          () { _stopAll(); setState(() {speedSel = 'Fast'; sendJson(compileInformation());}); }),
     ],
   );
 
@@ -1582,9 +1870,9 @@ class _MainPageState extends State<MainPage> {
             decoration: BoxDecoration(
               color: startBg,
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: startBorder.withOpacity(0.6), width: 1.5),
+              border: Border.all(color: startBorder.withAlpha(153), width: 1.5),
               boxShadow: (canStart && (running || inDelay))
-                  ? [BoxShadow(color: startBorder.withOpacity(0.2), blurRadius: 16)]
+                  ? [BoxShadow(color: startBorder.withAlpha(51), blurRadius: 16)]
                   : null,
             ),
             alignment: Alignment.center,
@@ -1604,10 +1892,10 @@ class _MainPageState extends State<MainPage> {
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                   color: (!running && !inDelay)
-                      ? T.red.withOpacity(0.6) : T.border,
+                      ? T.red.withAlpha(153) : T.border,
                   width: 1.5),
               boxShadow: (!running && !inDelay)
-                  ? [BoxShadow(color: T.red.withOpacity(0.15), blurRadius: 16)]
+                  ? [BoxShadow(color: T.red.withAlpha(38), blurRadius: 16)]
                   : null,
             ),
             alignment: Alignment.center,
@@ -1639,7 +1927,7 @@ class _MainPageState extends State<MainPage> {
           const BoxShadow(color: T.shadow, blurRadius: 12),
           // Subtle inner glow to separate court from app bg
           BoxShadow(
-              color: T.courtLine.withOpacity(0.08),
+              color: T.courtLine.withAlpha(20),
               blurRadius: 0, spreadRadius: -1),
         ],
       ),
@@ -1655,12 +1943,12 @@ class _MainPageState extends State<MainPage> {
                       decoration: BoxDecoration(
                         color: T.courtKitchen,
                         border: Border(
-                            top: BorderSide(color: T.courtLine.withOpacity(0.6), width: 1)),
+                            top: BorderSide(color: T.courtLine.withAlpha(153), width: 1)),
                       ))),
               // Vertical centre line (top half)
               // Positioned(
               //   left: c.maxWidth / 2 - 0.5, top: 0, bottom: 0, width: 1,
-              //   child: Container(color: T.courtLine.withOpacity(0.35)),
+              //   child: Container(color: T.courtLine.withAlpha(89)),
               // ),
               _topGrid(c, pad, hit, kitchen),
             ])),
@@ -1675,7 +1963,7 @@ class _MainPageState extends State<MainPage> {
                   T.net,
                 ]),
                 boxShadow: [
-                  BoxShadow(color: T.net.withOpacity(0.25), blurRadius: 8),
+                  BoxShadow(color: T.net.withAlpha(64), blurRadius: 8),
                 ],
               ),
             ),
@@ -1686,12 +1974,12 @@ class _MainPageState extends State<MainPage> {
                       decoration: BoxDecoration(
                         color: T.courtKitchen,
                         border: Border(
-                            bottom: BorderSide(color: T.courtLine.withOpacity(0.6), width: 1)),
+                            bottom: BorderSide(color: T.courtLine.withAlpha(153), width: 1)),
                       ))),
               // Vertical centre line (bottom half)
               // Positioned(
               //   left: c.maxWidth / 2 - 0.5, top: kitchen, bottom: 0, width: 1,
-              //   child: Container(color: T.courtLine.withOpacity(0.35)),
+              //   child: Container(color: T.courtLine.withAlpha(89)),
               // ),
               _botGrid(c, pad, hit, kitchen, sel, numbered),
             ])),
@@ -1712,7 +2000,7 @@ class _MainPageState extends State<MainPage> {
             left: pad + col * (uW / (kTopSize - 1)) - hit / 2,
             top:  pad + r   * (uH / (kTopSize - 1)) - hit / 2,
             child: GestureDetector(
-              onTap: () { _stopAll(); setState(() { topRow = r; topCol = col; }); },
+              onTap: () { _stopAll(); setState(() { topRow = r; topCol = col; sendJson(compileInformation());}); },
               child: Container(
                 width: hit, height: hit,
                 color: Colors.transparent,
@@ -1723,7 +2011,7 @@ class _MainPageState extends State<MainPage> {
                     shape: BoxShape.circle,
                     color: T.dotOff,
                     border: Border.all(
-                        color: T.courtLine.withOpacity(0.5), width: 1),
+                        color: T.courtLine.withAlpha(128), width: 1),
                   ),
                 ),
               ),
@@ -1759,8 +2047,8 @@ class _MainPageState extends State<MainPage> {
       if (_dragSeen.contains(key)) return;
       _dragSeen.add(key);
       setState(() {
-        if (_dragErase == true) sel.remove(key);
-        else if (!sel.contains(key)) sel.add(key);
+        if (_dragErase == true) {sel.remove(key);}
+        else if (!sel.contains(key)) {sel.add(key);}
       });
     }
 
@@ -1770,7 +2058,7 @@ class _MainPageState extends State<MainPage> {
         _stopAll(); _dragSeen.clear();
         final k = keyAt(d.localPosition);
         if (k != null) { _dragErase = sel.contains(k); touch(k); }
-        else _dragErase = false;
+        else {_dragErase = false;}
       },
       onPanUpdate: (d) {
         if (_dragErase == null) return;
@@ -1809,7 +2097,7 @@ class _MainPageState extends State<MainPage> {
       child: GestureDetector(
         onTap: () {
           _stopAll();
-          setState(() { if (sel.contains(key)) sel.remove(key); else sel.add(key); });
+          setState(() { if (sel.contains(key)) {sel.remove(key);} else {sel.add(key);} });
         },
         child: Container(
           width: hit, height: hit, alignment: Alignment.center,
@@ -1822,19 +2110,19 @@ class _MainPageState extends State<MainPage> {
               color: on ? color : offColor,
               border: Border.all(
                 color: on
-                    ? color.withOpacity(0.5)
+                    ? color.withAlpha(128)
                     : (inKitchen
-                        ? const Color.fromARGB(255, 33, 43, 63).withOpacity(0.5)
-                        : T.courtLine.withOpacity(0.4)),
+                        ? const Color.fromARGB(255, 33, 43, 63).withAlpha(128)
+                        : T.courtLine.withAlpha(102)),
                 width: 1,
               ),
               boxShadow: on
-                  ? [BoxShadow(color: color.withOpacity(0.50), blurRadius: 10, spreadRadius: 1)]
+                  ? [BoxShadow(color: color.withAlpha(128), blurRadius: 10, spreadRadius: 1)]
                   : null,
             ),
             child: (numbered && on)
                 ? Text('${idx + 1}',
-                    style: tx(14, Colors.black.withOpacity(0.85), w: FontWeight.w800))
+                    style: tx(14, Colors.black.withAlpha(217), w: FontWeight.w800))
                 : null,
           ),
         ),
@@ -1857,7 +2145,7 @@ class _MainPageState extends State<MainPage> {
     Widget section(String title, Color accent, List<Widget> rows) =>
       Container(
         margin: const EdgeInsets.only(bottom: 8),
-        decoration: _card(border: accent.withOpacity(0.25), glow: accent),
+        decoration: _card(border: accent.withAlpha(64), glow: accent),
         child: IntrinsicHeight(child: Row(children: [
           Container(
             width: 3,
