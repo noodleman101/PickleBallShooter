@@ -21,6 +21,7 @@ customFreq = 7
 gridSel = []
 pattern = "1-8|8-1"
 randomBottomSelection = []
+seqOrder = []
 
 def handle_json(data):
     connected = True
@@ -72,6 +73,19 @@ def handle_json(data):
             if "f" in cc:
                 customFreq = cc["f"]
                 print("CustomFreq: ", customFreq)
+        
+        # claude
+        if "sq" in obj:
+            sq = obj["sq"]
+            print("Seq order:", sq)
+            #if sq == "":
+            #    seqOrder = []
+            #else:
+            #    seqOrder =sq.split(",")
+            #print("seqOrder:", seqOrder)
+        #
+        
+        
         if "g" in obj:
             if obj["g"]!="[]":
                 gridSel = obj["g"]

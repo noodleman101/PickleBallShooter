@@ -236,6 +236,8 @@ class _MainPageState extends State<MainPage> {
     await p.setDouble('gFreq', gFreq);
     await p.setString('seqDir', seqDir.name);
     await p.setString('timing', timing.name);
+    await p.setInt('nextModeId', _nextModeId);
+    await p.setInt('nextSeqId', _nextSeqId);
 
     // Saved custom modes
     final modes = saved.where((s) => s.id != 'new_mode').toList();
@@ -292,6 +294,8 @@ class _MainPageState extends State<MainPage> {
     timing = TimingMode.values.firstWhere(
         (e) => e.name == timingStr, orElse: () => TimingMode.perShot);
 
+    _nextModeId = p.getInt('nextModeId') ?? 1;
+    _nextSeqId  = p.getInt('nextSeqId')  ?? 1;
     // Saved custom modes
     final count = p.getInt('savedCount') ?? 0;
     final loadedModes = <MachineSettings>[];
@@ -390,6 +394,8 @@ class _MainPageState extends State<MainPage> {
   // Saved sequences
   final List<SavedSequence> savedSeqs = [];
   SavedSequence? curSavedSeq;
+  int _nextModeId = 1;
+  int _nextSeqId  = 1;
 
   // Sentinel "no saved seq selected"
   final SavedSequence _nullSeq = SavedSequence(
@@ -612,6 +618,10 @@ class _MainPageState extends State<MainPage> {
     "g" : "[]",
     "rbs" : "[]",
     "pa" : "1-8|8-1",
+
+    //claude
+    "sq" : "",
+    //
   };
   var priorSent = <String, dynamic>{};
 
@@ -633,6 +643,13 @@ class _MainPageState extends State<MainPage> {
     var c = priorSent["cc"]["c"] != curCustom.cowl;
     var sp = priorSent["cc"]["p"] != curCustom.spin;
     var f = priorSent["cc"]["f"] != curCustom.freq;
+    
+
+    //claude wrote this, I wanted to understand but geniunly so lost
+    var curSeq = _effectiveSeq().map((m) => m.id).join(',');
+    if (priorSent["sq"] != curSeq) map["sq"] = curSeq; priorSent["sq"] = curSeq;
+
+
     if (s || t || c || sp || f) {
       map["cc"] = {};
       if (s) map["cc"]["s"] = curCustom.speed.toInt(); priorSent["cc"]["s"] = curCustom.speed.toInt();
@@ -666,6 +683,9 @@ class _MainPageState extends State<MainPage> {
         speed: 10, turret: 0, cowl: 0, spin: 0, freq: 7);
     curCustom = _newTpl;
     saved = [_newTpl];
+    //claude
+
+    //
     _loadPrefs().then((_) => setState(() {}));
   }
 
@@ -1134,6 +1154,7 @@ class _MainPageState extends State<MainPage> {
                   if (nw > old) nw--;
                   final it = seqList.removeAt(old);
                   seqList.insert(nw, it);
+                  sendJson(compileInformation());
                 });
               },
               itemBuilder: (ctx, i) =>
@@ -1234,7 +1255,7 @@ class _MainPageState extends State<MainPage> {
             const SizedBox(width: 6),
           ],
           GestureDetector(
-            onTap: () { _stopAll(); setState(() => seqList.removeAt(i)); },
+            onTap: () { _stopAll(); setState(() { seqList.removeAt(i); sendJson(compileInformation()); }); },
             child: Container(
               padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
@@ -1299,7 +1320,7 @@ class _MainPageState extends State<MainPage> {
             subtitle: Text(
                 'SPD ${avail[i].speed.toInt()}%  ·  FREQ ${avail[i].freq.toInt()}s',
                 style: tx(13, T.textMid)),
-            onTap: () { setState(() => seqList.add(avail[i])); Navigator.pop(context); },
+            onTap: () { setState(() { seqList.add(avail[i]); sendJson(compileInformation()); }); Navigator.pop(context); },
           ),
         ),
       ),
@@ -1325,7 +1346,7 @@ class _MainPageState extends State<MainPage> {
           }
           setState(() {
             final nq = SavedSequence(
-              id:      DateTime.now().millisecondsSinceEpoch.toString(),
+              id:      (_nextSeqId++).toString(),
               name:    t,
               modeIds: seqList.map((s) => s.id).toList(),
               dir:     seqDir,
@@ -1626,7 +1647,7 @@ class _MainPageState extends State<MainPage> {
           }
           setState(() {
             final np = MachineSettings(
-              id: DateTime.now().millisecondsSinceEpoch.toString(),
+              id: (_nextModeId++).toString(),
               name: t, speed: curCustom.speed, turret: curCustom.turret,
               cowl: curCustom.cowl, spin: curCustom.spin, freq: curCustom.freq,
             );
@@ -2050,7 +2071,6 @@ class _MainPageState extends State<MainPage> {
       setState(() {
         if (_dragErase == true) {sel.remove(key);}
         else if (!sel.contains(key)) {sel.add(key);}
-        sendJson(compileInformation());
       });
     }
 
@@ -2177,14 +2197,14 @@ class _MainPageState extends State<MainPage> {
           kv('Top pos', 'col $topCol  row $topRow'),
           kv('Dots', gridSel.isEmpty ? 'None' : gridSel.join(' → ')),
           kv('Pattern', patternSel),
-          kv('Speed', powerSel),
-          kv('Speed adj', '${speedAdj.toInt()}'),
+          kv('Power', powerSel),
+          kv('Power adj', '${speedAdj.toInt()}'),
           kv('Freq', '${freq.toInt()}s'),
           kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),
         ]),
         section('RANDOM', T.red, [
           kv('Dots', randSel.isEmpty ? 'None' : randSel.join(', ')),
-          kv('Speed', powerSel),
+          kv('Power', powerSel),
           kv('Speed adj', '${speedAdj.toInt()}'),
           kv('Freq', '${freq.toInt()}s'),
           kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),
@@ -2229,9 +2249,16 @@ class _MainPageState extends State<MainPage> {
 
   List<MachineSettings> _effectiveSeq() {
     if (seqList.isEmpty) return [];
-    return seqDir == SequenceDirection.topToBottom
-        ? List.from(seqList) : List.from(seqList.reversed);
-  }
+    final forward = List<MachineSettings>.from(seqList);
+    if (seqDir == SequenceDirection.topToBottom) {
+      // 1-8, 8-1 — forward then backward
+      final backward = List<MachineSettings>.from(seqList.reversed);
+      return [...forward, ...backward];
+    } else {
+      // 1-8, 1-8 — forward then forward again
+      return [...forward, ...forward];
+    }
+    }
 
   String _dirLabel(SequenceDirection d) => d == SequenceDirection.topToBottom
       ? '1 → 8 | 8 → 1' : 'Bottom → Top';
