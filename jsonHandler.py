@@ -7,7 +7,7 @@
 currentMode = "Appmode.grid"
 freq = 7
 numBalls = 10
-speedPattern = "Medium"
+power = "Medium"
 speedAdjustment = 0
 topRow = 0
 topCol = 0
@@ -18,13 +18,13 @@ customTurret = 0
 customCowl = 0
 customSpin = 0
 customFreq = 7
-bottomSelectionOrder = []
-pattern = "1-8,8-1"
+gridSel = []
+pattern = "1-8|8-1"
 randomBottomSelection = []
 
 def handle_json(data):
     connected = True
-    global currentMode, freq, numBalls, speedPattern, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, bottomSelectionOrder
+    global currentMode, freq, numBalls, power, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, gridSel
     try:
         obj = data
         if "cm" in obj:
@@ -36,9 +36,9 @@ def handle_json(data):
         if "n" in obj:
             numBalls = obj["n"]
             print("numBalls: ", numBalls)
-        if "sp" in obj:
-            speedPattern = obj["sp"]
-            print("speedPattern: ", speedPattern)
+        if "p" in obj:
+            power = obj["p"]
+            print("power: ", power)
         if "sa" in obj:
             speedAdjustment = obj["sa"]
             print("speedAdjustment: ", speedAdjustment)
@@ -73,29 +73,24 @@ def handle_json(data):
                 customFreq = cc["f"]
                 print("CustomFreq: ", customFreq)
         if "g" in obj:
-            g = obj.get("g")
-            if "p" in g:
-                pattern = g["p"]
-                print("Pattern: ", pattern)
-            if "bso" in g:
-                if g["bso"]!="[]":
-                    bottomSelectionOrder = g["bso"]
-                    bso = bottomSelectionOrder[1:-1]
-                    bso = bso.split(", ")
-                    bottomSelectionOrder = []
-                    for s in bso:
-                        try:
-                            x_str,y_str = s.split(",")
-                            x = int(x_str)
-                            y = int(y_str)
-                            bottomSelectionOrder.append([x,y])
-                        except Exception as e:
-                            print("Bad Coord: ", s, e)
-                    print("Bottom Selection Order: ", bottomSelectionOrder)
-                    
-                else:
-                    bottomSelectionOrder = []
-                    print("Bottom Selection Order: ", bottomSelectionOrder)
+            if obj["g"]!="[]":
+                gridSel = obj["g"]
+                g = gridSel[1:-1]
+                g = g.split(", ")
+                gridSel = []
+                for s in g:
+                    try:
+                        x_str,y_str = s.split(",")
+                        x = int(x_str)
+                        y = int(y_str)
+                        gridSel.append([x,y])
+                    except Exception as e:
+                        print("Bad Coord: ", s, e)
+                print("Grid Selection: ", gridSel)
+                
+            else:
+                gridSel = []
+                print("Grid Selection: ", gridSel)
         if "rbs" in obj:
                 if obj["rbs"]!="[]":
                     randomBottomSelection = obj["rbs"]

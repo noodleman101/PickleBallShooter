@@ -229,7 +229,7 @@ class _MainPageState extends State<MainPage> {
     await p.setDouble('freq', freq);
     await p.setDouble('speedAdj', speedAdj);
     await p.setInt('numBalls', numBalls);
-    await p.setString('speedSel', speedSel);
+    await p.setString('powerSel', powerSel);
     await p.setString('patternSel', patternSel);
     await p.setDouble('startDelay', startDelay);
     await p.setBool('showRunning', showRunning);
@@ -278,7 +278,7 @@ class _MainPageState extends State<MainPage> {
     freq       = p.getDouble('freq')       ?? 7;
     speedAdj   = p.getDouble('speedAdj')   ?? 1;
     numBalls   = p.getInt('numBalls')      ?? 10;
-    speedSel   = p.getString('speedSel')   ?? 'Medium';
+    powerSel   = p.getString('powerSel')   ?? 'Medium';
     patternSel = p.getString('patternSel') ?? '1-8,8-1';
     startDelay = p.getDouble('startDelay') ?? 0;
     showRunning= p.getBool('showRunning')  ?? false;
@@ -369,7 +369,7 @@ class _MainPageState extends State<MainPage> {
   final List<String> randSel = [];
 
   String patternSel = "1-8,8-1";
-  String speedSel   = "Medium";
+  String powerSel   = "Medium";
   double freq       = 7;
   double speedAdj   = 1;
   int    numBalls   = 10;
@@ -609,11 +609,9 @@ class _MainPageState extends State<MainPage> {
       "p" : 0,
       "f" : 7,
     },
-    "g" : {
-      "bso" : "[]",
-      "p" : "1-8,8-1"
-    },
+    "g" : "[]",
     "rbs" : "[]",
+    "pa" : "1-8|8-1",
   };
   var priorSent = <String, dynamic>{};
 
@@ -623,7 +621,7 @@ class _MainPageState extends State<MainPage> {
     if (priorSent["cm"] != mode.toString()) map["cm"] = mode.toString(); priorSent["cm"] = mode.toString();
     if (priorSent["f"] != freq) map["f"] = freq; priorSent["f"] = freq;
     if (priorSent["n"] != numBalls) map["n"] = numBalls; priorSent["n"] = numBalls;
-    if (priorSent["sp"] != speedSel) map["sp"] = speedSel; priorSent["sp"] = speedSel;
+    if (priorSent["p"] != powerSel) map["p"] = powerSel; priorSent["p"] = powerSel;
     if (priorSent["sa"] != speedAdj) map["sa"] = speedAdj; priorSent["sa"] = speedAdj;
     // if (priorSent["rbs"] != randomBottomSelection.toString()) map["rbs"] = randomBottomSelection.toString(); priorSent["rbs"] = randomBottomSelection.toString();
     if (priorSent["tr"] != topRow) map["tr"] = topRow; priorSent["tr"] = topRow;
@@ -643,13 +641,14 @@ class _MainPageState extends State<MainPage> {
       if (sp) map["cc"]["p"] = curCustom.spin.toInt(); priorSent["cc"]["p"] = curCustom.spin.toInt();
       if (f) map["cc"]["f"] = curCustom.freq.toInt(); priorSent["cc"]["f"] = curCustom.freq.toInt();
     }
-    // var bso = priorSent["g"]["bso"].toString() != bottomSelectionOrder.toString();
-    // var p = priorSent["g"]["p"] != pattern;
-    // if (bso || p) {
-      // map["g"] = {};
-      // if (bso) map["g"]["bso"] = bottomSelectionOrder.toString(); priorSent["g"]["bso"] = bottomSelectionOrder.toString();
-      // if (p) map["g"]["p"] = patternSel; priorSent["g"]["p"] = patternSel;
-    // }
+    if (priorSent["g"].toString() != gridSel.toString()) {
+      map["g"] = gridSel;
+      priorSent["g"] = gridSel;
+    }
+    if (priorSent["pa"] != patternSel) {
+      map["pa"] = patternSel;
+      priorSent["pa"] = patternSel;
+    }
 
     return map;
   }
@@ -937,7 +936,7 @@ class _MainPageState extends State<MainPage> {
       const SizedBox(height: 10),
       _patternRow(),
       const SizedBox(height: 8),
-      _speedRow(),
+      _powerRow(),
       const SizedBox(height: 8),
       _sliderSheet('SPEED ADJ', '${speedAdj.toInt()}', T.green, T.cyanDim,
         Slider(min: -5, max: 5, divisions: 10, value: speedAdj,
@@ -970,7 +969,7 @@ class _MainPageState extends State<MainPage> {
             () => setState(() => clearRandFlash = false));
       }, accent: T.red, accentBg: T.redDim)),
       const SizedBox(height: 10),
-      _speedRow(),
+      _powerRow(),
       const SizedBox(height: 8),
       _sliderSheet('SPEED ADJ', '${speedAdj.toInt()}', T.cyan, T.cyanDim,
         Slider(min: -5, max: 5, divisions: 10, value: speedAdj,
@@ -1792,7 +1791,7 @@ class _MainPageState extends State<MainPage> {
     children: [
       _Pill('CLEAR', clearGridFlash, () {
         _stopAll();
-        setState(() { gridSel.clear(); clearGridFlash = true; });
+        setState(() { gridSel.clear(); clearGridFlash = true; sendJson(compileInformation()); });
         Future.delayed(const Duration(milliseconds: 150),
             () => setState(() => clearGridFlash = false));
       }, accent: T.red, accentBg: T.redDim),
@@ -1805,19 +1804,19 @@ class _MainPageState extends State<MainPage> {
     ],
   );
 
-  Widget _speedRow() => Row(
+  Widget _powerRow() => Row(
     mainAxisAlignment: MainAxisAlignment.center,
     children: [
-      Text('SPEED:', style: tx(15, T.textMid, w: FontWeight.w700, ls: 0.8)),
+      Text('POWER:', style: tx(15, T.textMid, w: FontWeight.w700, ls: 0.8)),
       const SizedBox(width: 10),
-      _Pill('SLOW', speedSel == 'Slow',
-          () { _stopAll(); setState(() {speedSel = 'Slow'; sendJson(compileInformation());});}),
+      _Pill('SLOW', powerSel == 'Slow',
+          () { _stopAll(); setState(() {powerSel = 'Slow'; sendJson(compileInformation());});}),
       const SizedBox(width: 6),
-      _Pill('MED', speedSel == 'Medium',
-          () { _stopAll(); setState(() { speedSel = 'Medium'; sendJson(compileInformation());}); }),
+      _Pill('MED', powerSel == 'Medium',
+          () { _stopAll(); setState(() { powerSel = 'Medium'; sendJson(compileInformation());}); }),
       const SizedBox(width: 6),
-      _Pill('FAST', speedSel == 'Fast',
-          () { _stopAll(); setState(() {speedSel = 'Fast'; sendJson(compileInformation());}); }),
+      _Pill('FAST', powerSel == 'Fast',
+          () { _stopAll(); setState(() {powerSel = 'Fast'; sendJson(compileInformation());}); }),
     ],
   );
 
@@ -2051,6 +2050,7 @@ class _MainPageState extends State<MainPage> {
       setState(() {
         if (_dragErase == true) {sel.remove(key);}
         else if (!sel.contains(key)) {sel.add(key);}
+        sendJson(compileInformation());
       });
     }
 
@@ -2067,7 +2067,7 @@ class _MainPageState extends State<MainPage> {
         final k = keyAt(d.localPosition);
         if (k != null) touch(k);
       },
-      onPanEnd: (_) { _dragSeen.clear(); _dragErase = null; },
+      onPanEnd: (_) { _dragSeen.clear(); _dragErase = null; setState(() { sendJson(compileInformation()); }); },
       child: Stack(children: [
         for (int col = 0; col < kBotCols; col++)
           _botCell(0, col, uW, uH, pad, hit, kitchen, sel, numbered, inKitchen: true),
@@ -2177,14 +2177,14 @@ class _MainPageState extends State<MainPage> {
           kv('Top pos', 'col $topCol  row $topRow'),
           kv('Dots', gridSel.isEmpty ? 'None' : gridSel.join(' → ')),
           kv('Pattern', patternSel),
-          kv('Speed', speedSel),
+          kv('Speed', powerSel),
           kv('Speed adj', '${speedAdj.toInt()}'),
           kv('Freq', '${freq.toInt()}s'),
           kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),
         ]),
         section('RANDOM', T.red, [
           kv('Dots', randSel.isEmpty ? 'None' : randSel.join(', ')),
-          kv('Speed', speedSel),
+          kv('Speed', powerSel),
           kv('Speed adj', '${speedAdj.toInt()}'),
           kv('Freq', '${freq.toInt()}s'),
           kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),

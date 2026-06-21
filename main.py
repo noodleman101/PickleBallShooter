@@ -39,8 +39,8 @@ async def custom():
     testShotActive = jh.testShotActive
     
     if isRunning and not isRunning0:
-        shooterUpper.rampUp(customSpeed*220+5800+(customSpin*100), step=1000)
-        shooterLower.rampUp(customSpeed*220+5800+(customSpin*100), step=1000)
+        shooterUpper.rampUp(customSpeed*220+5800, step=1000)
+        shooterLower.rampUp(customSpeed*220+5800-(customSpin*100), step=1000)
         timer = time.time_ns()
         shotCount = 0
     elif not isRunning and isRunning0:
