@@ -60,25 +60,72 @@ async def custom():
             timer = 0
             
             
-    
-    if cowlAngle != jh.customCowl:
-        cowlMotor.enable()
-        cowlMotor.move(abs(jh.customCowl - cowlAngle), 200, 0 if jh.customCowl > cowlAngle else 1)
-        cowlAngle = jh.customCowl
-        time.sleep(0.25)
-        if cowlAngle == 0:
-            cowlMotor.disable()
-        
-    if turretAngle != jh.customTurret:
-        turretMotor.enable()
-        turretMotor.move(abs(jh.customTurret - turretAngle), 1000, 1 if jh.customTurret > turretAngle else 0)
-        
-        turretAngle = jh.customTurret
-        turretMotor.disable()
+    updateCowl(jh.customCowl)
+    updateTurret(jh.customTurret)
     
     if testShotActive:
         await feed()
         jh.testShotActive = False
+        
+def updateCowl(angle):
+    global cowlAngle
+    if cowlAngle != angle:
+        cowlMotor.enable()
+        cowlMotor.move(abs(angle - cowlAngle), 200, 0 if angle > cowlAngle else 1)
+        cowlAngle = angle
+        time.sleep(0.25)
+        if cowlAngle == 0:
+            cowlMotor.disable()
+            
+def updateTurret(angle):
+    global turretAngle
+    if turretAngle != angle:
+        turretMotor.enable()
+        turretMotor.move(abs(angle - turretAngle), 1000, 1 if angle > turretAngle else 0)
+        turretAngle = angle
+        turretMotor.disable()
+
+cycleCount = 0
+seqS = 10
+seqT = 0
+seqC = 0
+seqP = 0
+seqF = 7
+async def seq():
+    global isRunning0, timer, shotCount, cycleCount
+    isRunning = jh.isRunning
+    
+    if jh.savedCustoms == []:
+        return
+    
+    custom = jh.savedCustoms[jh.sequence[shotCount] - 1]
+    seqS = custom[1]
+    seqT = custom[2]
+    seqC = custom[3]
+    seqP = custom[4]
+    seqF = custom[5]
+    
+    if isRunning and not isRunning0:
+        shooterUpper.rampUp(seqS*220+5800, step=1000)
+        shooterLower.rampUp(seqS*220+5800-(seqP*100), step=1000)
+        timer = time.time_ns()
+        shotCount = 0
+        cycleCount = 0
+    elif not isRunning and isRunning0:
+        shooterLower.rampDown(1000,0.05)
+        shooterUpper.rampDown(1000,0.05)
+    isRunning0 = isRunning
+    
+        
+    updateCowl(seqC)
+    updateTurret(seqT)
+    
+        
+    
+    if isRunning:
+        1==1
+    
+    
  
 async def isConnected():
     await asyncio.sleep(0.02)
@@ -92,13 +139,13 @@ async def control():
             appMode = jh.currentMode
             x, mode = appMode.split(".")
             if mode == "grid":
-                await grid()
+                1==1
             if mode == "custom":
                 await custom()
             if mode == "random":
                 1==1
             if mode == "seq":
-                1==1
+                await seq()
             if mode == "debug":
                 1==1
             if mode == "settings":

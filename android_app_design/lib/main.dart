@@ -22,7 +22,7 @@ enum TimingMode { perShot, global }
 class MachineSettings {
   final String id;
   String name;
-  double speed, turret, cowl, spin, freq;
+  int speed, turret, cowl, spin, freq;
 
   MachineSettings({
     required this.id,
@@ -35,6 +35,7 @@ class MachineSettings {
   });
 
   @override
+  // ignore: avoid_renaming_method_parameters
   bool operator == (Object o) =>
       identical(this, o) || (o is MachineSettings && id == o.id);
   @override
@@ -48,7 +49,7 @@ class SavedSequence {
   List<String> modeIds; // ordered list of mode ids
   SequenceDirection dir;
   TimingMode timing;
-  double gFreq;
+  int gFreq;
 
   SavedSequence({
     required this.id,
@@ -226,14 +227,15 @@ class _MainPageState extends State<MainPage> {
   // ── persistence ───────────────────────────────────────────────
   Future<void> _savePrefs() async {
     final p = await SharedPreferences.getInstance();
-    await p.setDouble('freq', freq);
+    await p.setInt('freq', freq);
     await p.setDouble('speedAdj', speedAdj);
     await p.setInt('numBalls', numBalls);
+    await p.setInt('numCycles', numCycles);
     await p.setString('powerSel', powerSel);
     await p.setString('patternSel', patternSel);
     await p.setDouble('startDelay', startDelay);
     await p.setBool('showRunning', showRunning);
-    await p.setDouble('gFreq', gFreq);
+    await p.setInt('gFreq', gFreq);
     await p.setString('seqDir', seqDir.name);
     await p.setString('timing', timing.name);
     await p.setInt('nextModeId', _nextModeId);
@@ -246,11 +248,11 @@ class _MainPageState extends State<MainPage> {
       final s = modes[i];
       await p.setString('mode_${i}_id',     s.id);
       await p.setString('mode_${i}_name',   s.name);
-      await p.setDouble('mode_${i}_speed',  s.speed);
-      await p.setDouble('mode_${i}_turret', s.turret);
-      await p.setDouble('mode_${i}_cowl',   s.cowl);
-      await p.setDouble('mode_${i}_spin',   s.spin);
-      await p.setDouble('mode_${i}_freq',   s.freq);
+      await p.setInt('mode_${i}_speed',  s.speed);
+      await p.setInt('mode_${i}_turret', s.turret);
+      await p.setInt('mode_${i}_cowl',   s.cowl);
+      await p.setInt('mode_${i}_spin',   s.spin);
+      await p.setInt('mode_${i}_freq',   s.freq);
     }
 
     // Active (unsaved) seq list
@@ -269,7 +271,7 @@ class _MainPageState extends State<MainPage> {
       await p.setStringList('seq_${i}_modeIds', sq.modeIds);
       await p.setString('seq_${i}_dir',     sq.dir.name);
       await p.setString('seq_${i}_timing',  sq.timing.name);
-      await p.setDouble('seq_${i}_gFreq',   sq.gFreq);
+      await p.setInt('seq_${i}_gFreq',   sq.gFreq);
     }
     await p.setString('curSavedSeqId', curSavedSeq?.id ?? '');
   }
@@ -277,14 +279,15 @@ class _MainPageState extends State<MainPage> {
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
 
-    freq       = p.getDouble('freq')       ?? 7;
+    freq       = (p.getDouble('freq')       ?? 7).round();
     speedAdj   = p.getDouble('speedAdj')   ?? 1;
     numBalls   = p.getInt('numBalls')      ?? 10;
+    numCycles  = p.getInt('numCycles')     ?? 1;
     powerSel   = p.getString('powerSel')   ?? 'Medium';
     patternSel = p.getString('patternSel') ?? '1-8,8-1';
     startDelay = p.getDouble('startDelay') ?? 0;
     showRunning= p.getBool('showRunning')  ?? false;
-    gFreq      = p.getDouble('gFreq')      ?? 7;
+    gFreq      = (p.getDouble('gFreq')      ?? 7).round();
 
     final seqDirStr = p.getString('seqDir') ?? 'topToBottom';
     seqDir = SequenceDirection.values.firstWhere(
@@ -305,11 +308,11 @@ class _MainPageState extends State<MainPage> {
       loadedModes.add(MachineSettings(
         id:     id,
         name:   p.getString('mode_${i}_name')   ?? 'Mode $i',
-        speed:  p.getDouble('mode_${i}_speed')  ?? 50,
-        turret: p.getDouble('mode_${i}_turret') ?? 0,
-        cowl:   p.getDouble('mode_${i}_cowl')   ?? 0,
-        spin:   p.getDouble('mode_${i}_spin')   ?? 0,
-        freq:   p.getDouble('mode_${i}_freq')   ?? 7,
+        speed:  (p.getDouble('mode_${i}_speed')  ?? 50).round(),
+        turret: (p.getDouble('mode_${i}_turret') ?? 0).round(),
+        cowl:   (p.getDouble('mode_${i}_cowl')   ?? 0).round(),
+        spin:   (p.getDouble('mode_${i}_spin')   ?? 0).round(),
+        freq:   (p.getDouble('mode_${i}_freq')   ?? 7).round(),
       ));
     }
     saved = [_newTpl, ...loadedModes];
@@ -344,7 +347,7 @@ class _MainPageState extends State<MainPage> {
             (e) => e.name == dirStr, orElse: () => SequenceDirection.topToBottom),
         timing:  TimingMode.values.firstWhere(
             (e) => e.name == timStr, orElse: () => TimingMode.perShot),
-        gFreq:   p.getDouble('seq_${i}_gFreq') ?? 7,
+        gFreq:   (p.getDouble('seq_${i}_gFreq') ?? 7).round(),
       ));
     }
 
@@ -374,9 +377,10 @@ class _MainPageState extends State<MainPage> {
 
   String patternSel = "1-8,8-1";
   String powerSel   = "Medium";
-  double freq       = 7;
+  int freq       = 7;
   double speedAdj   = 1;
   int    numBalls   = 10;
+  int    numCycles  = 1;
 
   bool?       _dragErase;
   final Set<String> _dragSeen = {};
@@ -389,7 +393,7 @@ class _MainPageState extends State<MainPage> {
   final List<MachineSettings> seqList = [];
   SequenceDirection seqDir = SequenceDirection.topToBottom;
   TimingMode        timing = TimingMode.perShot;
-  double            gFreq  = 7;
+  int            gFreq  = 7;
 
   // Saved sequences
   final List<SavedSequence> savedSeqs = [];
@@ -510,14 +514,15 @@ class _MainPageState extends State<MainPage> {
                 for (final c in s.characteristics) {
                   if (c.uuid.toString() == charUuid) {
                     jsonChar = c;
-                    isConnected = true;
-                    isConnecting = false;
                     debugPrint("JSON characteristic ready!");
-                    setState(() {});
                     priorSent = defaultJson;
                     compileInformation();
-                    sendJson(priorSent);
-                    debugPrint("JSON sent");
+                    writing = false;
+                    await sendJson(priorSent);
+                    await sendJson({"sc" : saved.map((m) { if (m.id != "new_mode") { return "[${m.id},${m.speed},${m.turret},${m.cowl},${m.spin},${m.freq}]"; } }).nonNulls.join('|')});
+                    isConnected = true;
+                    isConnecting = false;
+                    setState(() {});
                     await device!.requestMtu(247);
                     return;
                   }
@@ -534,7 +539,7 @@ class _MainPageState extends State<MainPage> {
     });
 
     // Optional: scan timeout for debugging
-    Future.delayed(const Duration(seconds: 10), () async {
+    Future.delayed(const Duration(seconds: 15), () async {
       if (!isConnected && isConnecting) {
         debugPrint("Scan timeout — device not found");
         await FlutterBluePlus.stopScan();
@@ -569,9 +574,13 @@ class _MainPageState extends State<MainPage> {
     return;
   }
 
-
+  bool writing = false;
   // --------------- JSON ------------------
   Future<void> sendJson(Map<String, dynamic> data) async {
+    while (writing) {
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    writing = true;
     if (jsonChar == null) return;
 
     if (device == null) return;
@@ -594,6 +603,7 @@ class _MainPageState extends State<MainPage> {
       await jsonChar!.write(chunk, withoutResponse: false);
       await Future.delayed(const Duration(milliseconds: 10));
     }
+    writing = false;
   }
 
 
@@ -602,6 +612,7 @@ class _MainPageState extends State<MainPage> {
     "cm" : AppMode.grid.toString(),
     "f" : 7,
     "n" : 10,
+    "nc" : 1,
     "sp" : "Medium",
     "sa" : 0,
     "tr" : 0,
@@ -618,11 +629,10 @@ class _MainPageState extends State<MainPage> {
     "g" : "[]",
     "rbs" : "[]",
     "pa" : "1-8|8-1",
-
-    //claude
     "sq" : "",
-    //
+    "sqd" : "topToBottom",
   };
+
   var priorSent = <String, dynamic>{};
 
   Map<String,dynamic> compileInformation() {
@@ -631,9 +641,9 @@ class _MainPageState extends State<MainPage> {
     if (priorSent["cm"] != mode.toString()) map["cm"] = mode.toString(); priorSent["cm"] = mode.toString();
     if (priorSent["f"] != freq) map["f"] = freq; priorSent["f"] = freq;
     if (priorSent["n"] != numBalls) map["n"] = numBalls; priorSent["n"] = numBalls;
+    if (priorSent["nc"] != numCycles) map["nc"] = numCycles; priorSent["nc"] = numCycles;
     if (priorSent["p"] != powerSel) map["p"] = powerSel; priorSent["p"] = powerSel;
     if (priorSent["sa"] != speedAdj) map["sa"] = speedAdj; priorSent["sa"] = speedAdj;
-    // if (priorSent["rbs"] != randomBottomSelection.toString()) map["rbs"] = randomBottomSelection.toString(); priorSent["rbs"] = randomBottomSelection.toString();
     if (priorSent["tr"] != topRow) map["tr"] = topRow; priorSent["tr"] = topRow;
     if (priorSent["tc"] != topCol) map["tc"] = topCol; priorSent["tc"] = topCol;
     if (priorSent["ts"] != testShotFlash) map["ts"] = testShotFlash; priorSent["ts"] = testShotFlash;
@@ -641,13 +651,14 @@ class _MainPageState extends State<MainPage> {
     var s = priorSent["cc"]["s"] != curCustom.speed;
     var t = priorSent["cc"]["t"] != curCustom.turret;
     var c = priorSent["cc"]["c"] != curCustom.cowl;
+    debugPrint(curCustom.cowl.toString());
     var sp = priorSent["cc"]["p"] != curCustom.spin;
     var f = priorSent["cc"]["f"] != curCustom.freq;
     
-
-    //claude wrote this, I wanted to understand but geniunly so lost
-    var curSeq = _effectiveSeq().map((m) => m.id).join(',');
+  
+    var curSeq = seqList.map((m) => m.id).join(',');
     if (priorSent["sq"] != curSeq) map["sq"] = curSeq; priorSent["sq"] = curSeq;
+    if (priorSent["sqd"] != seqDir.name) map["sqd"] = seqDir.name; priorSent["sqd"] = seqDir.name;
 
 
     if (s || t || c || sp || f) {
@@ -683,9 +694,7 @@ class _MainPageState extends State<MainPage> {
         speed: 10, turret: 0, cowl: 0, spin: 0, freq: 7);
     curCustom = _newTpl;
     saved = [_newTpl];
-    //claude
-
-    //
+    _savePrefs();
     _loadPrefs().then((_) => setState(() {}));
   }
 
@@ -711,20 +720,21 @@ class _MainPageState extends State<MainPage> {
   void _startMachine() {
     if (!_startAllowed || running || delaySeconds != null) return;
 
-    double ef = freq;
+    int ef = freq;
     if (mode == AppMode.custom) ef = curCustom.freq;
     if (mode == AppMode.seq && timing == TimingMode.global) ef = gFreq;
 
-    final unlimited = numBalls == 25;
+    final unlimited = numBalls == 25 && mode != AppMode.seq;
+    final ballsToShoot = mode == AppMode.seq ? seqList.length*numCycles : numBalls;
 
     void beginRunning() {
       setState(() {
         running      = true;
         delaySeconds = null;
-        ballsLeft    = unlimited ? null : numBalls;
+        ballsLeft    = unlimited ? null : ballsToShoot;
         sendJson(compileInformation());
       });
-      if (!unlimited && showRunning && numBalls > 0) {
+      if (!unlimited && showRunning && ballsToShoot > 0) {
         _ballTimer = Timer.periodic(
           Duration(milliseconds: (ef * 1000).round()),
           (t) => setState(() {
@@ -964,8 +974,8 @@ class _MainPageState extends State<MainPage> {
           onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _sliderSheet('FREQ', '${freq.toInt()}s', T.amber, T.amberDim,
-        Slider(min: 3, max: 12, divisions: 9, value: freq,
-          onChanged: (v) { _stopAll(); setState(() => freq = v); },
+        Slider(min: 3, max: 12, divisions: 9, value: freq.toDouble(),
+          onChanged: (v) { _stopAll(); setState(() => freq = v.round()); },
           onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _ballsSheet(),
@@ -997,8 +1007,8 @@ class _MainPageState extends State<MainPage> {
           onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _sliderSheet('FREQ', '${freq.toInt()}s', T.amber, T.amberDim,
-        Slider(min: 3, max: 12, divisions: 9, value: freq,
-          onChanged: (v) { _stopAll(); setState(() => freq = v); },
+        Slider(min: 3, max: 12, divisions: 9, value: freq.toDouble(),
+          onChanged: (v) { _stopAll(); setState(() => freq = v.round()); },
           onChangeEnd: (v) => sendJson(compileInformation()),),
       ),
       _ballsSheet(),
@@ -1035,7 +1045,7 @@ class _MainPageState extends State<MainPage> {
       const SizedBox(height: 10),
       Wrap(spacing: 8, runSpacing: 8, children: [
         _Pill('SAVE VALUES', true, _saveValues, accent: T.green, accentBg: T.greenDim),
-        _Pill('SAVE NEW', true, _saveNew, accent: T.amber, accentBg: T.amberDim),
+        _Pill('SAVE NEW', true,  _saveNew, accent: T.amber, accentBg: T.amberDim),
         _Pill('RENAME', true, _renameMode, accent: T.cyan, accentBg: T.cyanDim),
         _Pill('TEST SHOT', testShotFlash, () {
           setState(() {testShotFlash = true; sendJson(compileInformation());});
@@ -1086,6 +1096,7 @@ class _MainPageState extends State<MainPage> {
                 // Load the saved sequence into the working state
                 _loadSavedSeq(sq);
               }
+              sendJson(compileInformation());
             });
           },
         ),
@@ -1171,12 +1182,12 @@ class _MainPageState extends State<MainPage> {
       if (timing == TimingMode.global) ...[
         const SizedBox(height: 8),
         _sliderSheet('GLOBAL FREQ', '${gFreq.toInt()}s', T.amber, T.amberDim,
-          Slider(min: 3, max: 12, divisions: 9, value: gFreq,
-            onChanged: (v) { _stopAll(); setState(() => gFreq = v); }),
+          Slider(min: 3, max: 12, divisions: 9, value: gFreq.toDouble(),
+            onChanged: (v) { _stopAll(); setState(() => gFreq = v.round()); }),
         ),
       ],
       const SizedBox(height: 8),
-      _ballsSheet(),
+      _ballsSheetSeq(),
     ]),
   );
 
@@ -1190,7 +1201,7 @@ class _MainPageState extends State<MainPage> {
     }
     seqDir = sq.dir;
     timing = sq.timing;
-    gFreq  = sq.gFreq;
+    gFreq  = sq.gFreq.toInt();
   }
 
   // Placeholder for a deleted mode — keeps it visible with a warning
@@ -1436,7 +1447,7 @@ class _MainPageState extends State<MainPage> {
     Widget btn(String label, SequenceDirection d) {
       final a = seqDir == d;
       return Expanded(child: GestureDetector(
-        onTap: () { _stopAll(); setState(() => seqDir = d); },
+        onTap: () { _stopAll(); setState(() { seqDir = d; sendJson(compileInformation()); }); },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
           margin: const EdgeInsets.symmetric(horizontal: 2),
@@ -1541,13 +1552,13 @@ class _MainPageState extends State<MainPage> {
   Widget _customSliders() => Column(children: [
     _sliderSheet('SPEED', '${curCustom.speed.toInt()}%', T.amber, T.amberDim,
       Slider(
-        min: 10, max: 100, divisions: 18, value: curCustom.speed,
+        min: 10, max: 100, divisions: 18, value: curCustom.speed.toDouble(),
         activeColor: T.amber, inactiveColor: T.border,
         onChangeStart: (_) { if (curCustom.speed < 80) speedUnlocked = false; },
         onChanged: (v) {
           _stopAll();
           setState(() {
-            final s = (v / 5).round() * 5.0;
+            final s = (v / 5).round() * 5;
             if (!speedUnlocked && s > 80 && curCustom.speed <= 80) {
               curCustom.speed = 80;
             } else { curCustom.speed = s; }
@@ -1560,27 +1571,27 @@ class _MainPageState extends State<MainPage> {
       ),
     ),
     _sliderSheet('TURRET', '${curCustom.turret.toInt()}°', T.cyan, T.cyanDim,
-      Slider(min: -20, max: 20, divisions: 40, value: curCustom.turret,
+      Slider(min: -20, max: 20, divisions: 40, value: curCustom.turret.toDouble(),
         activeColor: T.cyan, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.turret = v); },
+        onChanged: (v) { _stopAll(); setState(() => curCustom.turret = v.round()); },
         onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
     _sliderSheet('COWL', '${curCustom.cowl.toInt()}°', T.violet, T.violetDim,
-      Slider(min: 0, max: 25, divisions: 25, value: curCustom.cowl,
+      Slider(min: 0, max: 25, divisions: 25, value: curCustom.cowl.toDouble(),
         activeColor: T.violet, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.cowl = v); },
+        onChanged: (v) { _stopAll(); setState(() => curCustom.cowl = v.round()); },
         onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
     _sliderSheet('SPIN', '${curCustom.spin.toInt()}', T.green, T.greenDim,
-      Slider(min: -10, max: 10, divisions: 20, value: curCustom.spin,
+      Slider(min: -10, max: 10, divisions: 20, value: curCustom.spin.toDouble(),
         activeColor: T.green, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.spin = v); },
+        onChanged: (v) { _stopAll(); setState(() => curCustom.spin = v.round()); },
         onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
     _sliderSheet('FREQ', '${curCustom.freq.toInt()}s', T.amber, T.amberDim,
-      Slider(min: 3, max: 12, divisions: 9, value: curCustom.freq,
+      Slider(min: 3, max: 12, divisions: 9, value: curCustom.freq.toDouble(),
         activeColor: T.amber, inactiveColor: T.border,
-        onChanged: (v) { _stopAll(); setState(() => curCustom.freq = v); },
+        onChanged: (v) { _stopAll(); setState(() => curCustom.freq = v.round()); },
         onChangeEnd: (v) => sendJson(compileInformation()),),
     ),
   ]);
@@ -1627,10 +1638,22 @@ class _MainPageState extends State<MainPage> {
     );
   }
 
+  Widget _ballsSheetSeq() {
+    final label = numCycles == 10 ? 'UNTIL STOP' : '$numCycles';
+    return _sliderSheet('# OF CYCLES', label, T.cyan, T.cyanDim,
+      Slider(min: 1, max: 10, divisions: 10,
+        value: numCycles.toDouble(),
+        activeColor: T.cyan, inactiveColor: T.border,
+        onChanged: (v) { _stopAll(); setState(() => numCycles = v.round()); },
+        onChangeEnd: (_) => sendJson(compileInformation()),
+        ),
+    );
+  }
+
   // ─────────────────────────────────────────────────────────────
   // SAVE / RENAME / DELETE (Custom mode)
   // ─────────────────────────────────────────────────────────────
-  void _saveNew() {
+  void _saveNew() async {
     final ctrl = TextEditingController();
     showDialog(context: context, builder: (_) => _dlg(
       title: 'SAVE AS NEW MODE',
@@ -1654,6 +1677,7 @@ class _MainPageState extends State<MainPage> {
             saved.add(np);
             curCustom = np;
             sendJson(compileInformation());
+            sendJson({"sc" : saved.map((m) { if (m.id != "new_mode") { return "[${m.id},${m.speed},${m.turret},${m.cowl},${m.spin},${m.freq}]"; } }).nonNulls.join('|')});
           });
           _savePrefs();
           Navigator.pop(context);
@@ -1669,6 +1693,7 @@ class _MainPageState extends State<MainPage> {
     }
     setState(() {});
     _savePrefs();
+    sendJson({"sc" : saved.map((m) { if (m.id != "new_mode") { return "[${m.id},${m.speed},${m.turret},${m.cowl},${m.spin},${m.freq}]"; } }).nonNulls.join('|')});
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('"${curCustom.name}" saved.', style: tx(12, Colors.white)),
       duration: const Duration(milliseconds: 1200),
@@ -2227,7 +2252,7 @@ class _MainPageState extends State<MainPage> {
               : seqList.map((s) => s.name).join(' → ')),
           kv('Playback', eff.isEmpty ? 'Empty'
               : eff.map((s) => s.name).join(' → ')),
-          kv('Balls', numBalls == 25 ? 'Until Stop' : '$numBalls'),
+          kv('Cycles', numCycles == 10 ? 'Until Stop' : '$numCycles'),
           kv('Saved seqs', savedSeqs.isEmpty ? 'None'
               : savedSeqs.map((sq) => sq.name).join(', ')),
           if (eff.isNotEmpty) ...[

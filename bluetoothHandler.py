@@ -31,6 +31,7 @@ async def json_task():
 
     
 async def advertise():
+    global connected
     while True:
         #lcd.clear()
         #lcd.putstr("Advertising...")

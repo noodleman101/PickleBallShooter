@@ -7,6 +7,7 @@
 currentMode = "Appmode.grid"
 freq = 7
 numBalls = 10
+numCycles = 1
 power = "Medium"
 speedAdjustment = 0
 topRow = 0
@@ -21,11 +22,11 @@ customFreq = 7
 gridSel = []
 pattern = "1-8|8-1"
 randomBottomSelection = []
-seqOrder = []
+sequence = []
+savedCustoms = []
 
 def handle_json(data):
-    connected = True
-    global currentMode, freq, numBalls, power, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, gridSel
+    global currentMode, freq, numBalls, power, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, gridSel, sequence, savedCustoms
     try:
         obj = data
         if "cm" in obj:
@@ -37,6 +38,9 @@ def handle_json(data):
         if "n" in obj:
             numBalls = obj["n"]
             print("numBalls: ", numBalls)
+        if "nc" in obj:
+            numCycles = obj["nc"]
+            print("numCycles: ", numCycles)
         if "p" in obj:
             power = obj["p"]
             print("power: ", power)
@@ -74,16 +78,41 @@ def handle_json(data):
                 customFreq = cc["f"]
                 print("CustomFreq: ", customFreq)
         
-        # claude
         if "sq" in obj:
-            sq = obj["sq"]
-            print("Seq order:", sq)
-            #if sq == "":
-            #    seqOrder = []
-            #else:
-            #    seqOrder =sq.split(",")
-            #print("seqOrder:", seqOrder)
-        #
+            if obj["sq"] != "":
+                sequence = obj["sq"].split(",")
+                sequence = [int(x) for x in sequence]
+                print("Seq order:", sequence)
+            else:
+                sequence = []
+                print("Seq order:", sequence)
+        
+        if "sqd" in obj:
+            sqd = obj["sqd"]
+            print("Seq direction:", sqd)
+            
+        if "sc" in obj:
+            if obj["sc"] != '[]':
+                sc = obj["sc"].split("|")
+                savedCustoms = []
+                for custom in sc:
+                    custom = custom[1:-1]
+                    try:
+                        id,s,t,c,p,f = custom.split(",")
+                        id = int(id)
+                        s = float(s)
+                        t = float(t)
+                        c = float(c)
+                        p = float(p)
+                        f = float(f)
+                        savedCustoms.append([id,s,t,c,p,f])
+                    except Exception as e:
+                        print("Bad custom: ", custom, ", with error: ", e)
+                print("Saved Customs: ", savedCustoms)
+            else:
+                savedCustoms = []
+                print("Saved Customs: ", savedCustoms)
+                    
         
         
         if "g" in obj:

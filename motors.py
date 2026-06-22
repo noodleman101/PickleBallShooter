@@ -1,4 +1,5 @@
 from machine import Pin, PWM
+import time
 
 class ShooterMotor:
     def __init__(self, shooterPWM, shooterEN=None, freq=20000):
@@ -20,7 +21,7 @@ class ShooterMotor:
 
     def shooterGo(self, speed):
         self.shooterEnable()
-        self.shooterPWM.duty_u16(speed)
+        self.shooterPWM.duty_u16(int(speed))
 
     def shooterStop(self):
         self.shooterPWM.duty_u16(0)
