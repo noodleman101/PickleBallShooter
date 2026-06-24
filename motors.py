@@ -10,6 +10,7 @@ class ShooterMotor:
 
         self.shooterStop()
         self.shooterDisable()
+        self.speed = 0
 
     def shooterEnable(self):
         if self.shooterEN:
@@ -22,12 +23,15 @@ class ShooterMotor:
     def shooterGo(self, speed):
         self.shooterEnable()
         self.shooterPWM.duty_u16(int(speed))
+        self.speed = 0
 
     def shooterStop(self):
         self.shooterPWM.duty_u16(0)
 
     def rampUp(self, targetSpeed, step=1000, speedUpDelay=0.05):
-        speed = 0
+        speed = self.shooterPWM.duty_u16()
+        if speed > targetSpeed:
+            return
         self.shooterEnable()
         while speed < targetSpeed:
             self.shooterGo(speed)
@@ -37,16 +41,21 @@ class ShooterMotor:
             time.sleep(speedUpDelay)
         self.shooterGo(targetSpeed)
 
-    def rampDown(self, step=1000, speedDownDelay=0.05):
-        currentSpeed = self.shooterPWM.duty_u16()
-        while currentSpeed > 0:
-            self.shooterGo(currentSpeed)
-            currentSpeed -= step
-            if currentSpeed < 0:
-                currentSpeed = 0
+    def rampDown(self, targetSpeed, step=1000, speedDownDelay=0.05):
+        speed = self.shooterPWM.duty_u16()
+        if speed < targetSpeed:
+            return
+        while speed > targetSpeed:
+            self.shooterGo(speed)
+            speed -= step
+            if speed < targetSpeed:
+                speed = targetSpeed
             time.sleep(speedDownDelay)
-        self.shooterStop()
-        self.shooterDisable()
+        if targetSpeed == 0:
+            self.shooterStop()
+            self.shooterDisable()
+        else:
+            self.shooterGo(targetSpeed)
         
 class Stepper:
     def __init__ (self, STEPPin, DIRPin, ENPin, ratio):

@@ -48,9 +48,11 @@ async def advertise():
         #lcd.clear()
         #lcd.putstr("Connected")
         connected = True
+        jh.isRunning = False
         
         await connection.disconnected()
         print("Central disconnected")
         #lcd.clear()
         #lcd.putstr("Disconnected")
         connected = False
+        jh.reset()

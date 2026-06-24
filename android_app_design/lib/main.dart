@@ -279,7 +279,7 @@ class _MainPageState extends State<MainPage> {
   Future<void> _loadPrefs() async {
     final p = await SharedPreferences.getInstance();
 
-    freq       = (p.getDouble('freq')       ?? 7).round();
+    freq       = p.getInt('freq')          ?? 7;
     speedAdj   = p.getDouble('speedAdj')   ?? 1;
     numBalls   = p.getInt('numBalls')      ?? 10;
     numCycles  = p.getInt('numCycles')     ?? 1;
@@ -287,7 +287,7 @@ class _MainPageState extends State<MainPage> {
     patternSel = p.getString('patternSel') ?? '1-8,8-1';
     startDelay = p.getDouble('startDelay') ?? 0;
     showRunning= p.getBool('showRunning')  ?? false;
-    gFreq      = (p.getDouble('gFreq')      ?? 7).round();
+    gFreq      = p.getInt('gFreq')       ?? 7;
 
     final seqDirStr = p.getString('seqDir') ?? 'topToBottom';
     seqDir = SequenceDirection.values.firstWhere(
@@ -308,11 +308,11 @@ class _MainPageState extends State<MainPage> {
       loadedModes.add(MachineSettings(
         id:     id,
         name:   p.getString('mode_${i}_name')   ?? 'Mode $i',
-        speed:  (p.getDouble('mode_${i}_speed')  ?? 50).round(),
-        turret: (p.getDouble('mode_${i}_turret') ?? 0).round(),
-        cowl:   (p.getDouble('mode_${i}_cowl')   ?? 0).round(),
-        spin:   (p.getDouble('mode_${i}_spin')   ?? 0).round(),
-        freq:   (p.getDouble('mode_${i}_freq')   ?? 7).round(),
+        speed:  p.getInt('mode_${i}_speed')  ?? 50,
+        turret: p.getInt('mode_${i}_turret') ?? 0,
+        cowl:   p.getInt('mode_${i}_cowl')   ?? 0,
+        spin:   p.getInt('mode_${i}_spin')   ?? 0,
+        freq:   p.getInt('mode_${i}_freq')   ?? 7,
       ));
     }
     saved = [_newTpl, ...loadedModes];
@@ -347,7 +347,7 @@ class _MainPageState extends State<MainPage> {
             (e) => e.name == dirStr, orElse: () => SequenceDirection.topToBottom),
         timing:  TimingMode.values.firstWhere(
             (e) => e.name == timStr, orElse: () => TimingMode.perShot),
-        gFreq:   (p.getDouble('seq_${i}_gFreq') ?? 7).round(),
+        gFreq:   p.getInt('seq_${i}_gFreq') ?? 7,
       ));
     }
 
@@ -1669,13 +1669,14 @@ class _MainPageState extends State<MainPage> {
             return;
           }
           setState(() {
+
             final np = MachineSettings(
               id: (_nextModeId++).toString(),
               name: t, speed: curCustom.speed, turret: curCustom.turret,
               cowl: curCustom.cowl, spin: curCustom.spin, freq: curCustom.freq,
             );
             saved.add(np);
-            curCustom = np;
+            curCustom = saved.firstWhere((s) => s.id == curCustom.id);
             sendJson(compileInformation());
             sendJson({"sc" : saved.map((m) { if (m.id != "new_mode") { return "[${m.id},${m.speed},${m.turret},${m.cowl},${m.spin},${m.freq}]"; } }).nonNulls.join('|')});
           });

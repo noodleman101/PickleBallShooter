@@ -23,10 +23,35 @@ gridSel = []
 pattern = "1-8|8-1"
 randomBottomSelection = []
 sequence = []
+sequenceDirection = "topToBottom"
 savedCustoms = []
 
+def reset():
+    global currentMode, numCycles, freq, numBalls, power, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, gridSel, sequence, sequenceDirection, savedCustoms, randomBottomSelection
+    currentMode = "Appmode.grid"
+    freq = 7
+    numBalls = 10
+    numCycles = 1
+    power = "Medium"
+    speedAdjustment = 0
+    topRow = 0
+    topCol = 0
+    testShotActive = False
+    isRunning = False
+    customSpeed = 10
+    customTurret = 0
+    customCowl = 0
+    customSpin = 0
+    customFreq = 7
+    gridSel = []
+    pattern = "1-8|8-1"
+    randomBottomSelection = []
+    sequence = []
+    sequenceDirection = "topToBottom"
+    savedCustoms = []
+
 def handle_json(data):
-    global currentMode, freq, numBalls, power, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, gridSel, sequence, savedCustoms
+    global currentMode, freq, numBalls, numCycles, power, speedAdjustment, topRow, topCol, testShotActive, isRunning, customSpeed, customTurret, customCowl, customSpin, customFreq, gridSel, sequence, sequenceDirection, savedCustoms, randomBottomSelection
     try:
         obj = data
         if "cm" in obj:
@@ -88,8 +113,8 @@ def handle_json(data):
                 print("Seq order:", sequence)
         
         if "sqd" in obj:
-            sqd = obj["sqd"]
-            print("Seq direction:", sqd)
+            sequenceDirection = obj["sqd"]
+            print("Seq direction:", sequenceDirection)
             
         if "sc" in obj:
             if obj["sc"] != '[]':
