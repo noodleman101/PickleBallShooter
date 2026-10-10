@@ -9,6 +9,7 @@ import motors
 from picozero import pico_led
 from simple_pid import PID
 
+#nothing
 lowerCounter0 = 0
 def lowerCounter(pin):
     global lowerCounter0
