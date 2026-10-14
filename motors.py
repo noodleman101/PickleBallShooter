@@ -1,4 +1,9 @@
 from machine import Pin, PWM
+<<<<<<< Updated upstream
+=======
+import time
+import asyncio
+>>>>>>> Stashed changes
 
 class ShooterMotor:
     def __init__(self, shooterPWM, shooterEN=None, freq=20000):
@@ -44,8 +49,17 @@ class ShooterMotor:
             if currentSpeed < 0:
                 currentSpeed = 0
             time.sleep(speedDownDelay)
+<<<<<<< Updated upstream
         self.shooterStop()
         self.shooterDisable()
+=======
+        if targetSpeed == 0:
+            self.shooterStop()
+            self.shooterDisable()
+        else:
+            self.shooterGo(targetSpeed) 
+
+>>>>>>> Stashed changes
         
 class Stepper:
     def __init__ (self, STEPPin, DIRPin, ENPin, ratio):
@@ -53,15 +67,18 @@ class Stepper:
         self.DIR = Pin(DIRPin, Pin.OUT)
         self.EN = Pin(ENPin, Pin.OUT)
         self.ratio = ratio
-        
+        self.stepsLeft = 0
+        self.delay = 0
+        self.nextTime = 0
+
         self.EN.value(1) #disabled to start
-        
+
     def enable (self):
         self.EN.value(0)
-        
+
     def disable (self):
         self.EN.value(1)
-        
+
     def move (self,degrees,speedDelay,direction):
         self.EN.value(0)
         self.DIR.value(direction)
@@ -71,3 +88,61 @@ class Stepper:
             time.sleep_us(2)      # min 1 µs
             self.STEP.value(0)
             time.sleep_us(speedDelay)
+
+    def prepare(self, degrees, speedDelay, direction):
+        self.EN.value(0)
+        self.DIR.value(direction)
+        self.stepsLeft = round((degrees * self.ratio) / (1.8/16))
+        self.delay = speedDelay + 2
+        self.nextTime = time.ticks_us()
+
+    def stepIfDue(self, now):
+        if self.stepsLeft <= 0:
+            return False
+        if time.ticks_diff(now, self.nextTime) >= 0:
+            self.STEP.value(1)
+            time.sleep_us(2)
+            self.STEP.value(0)
+            self.stepsLeft -= 1
+            self.nextTime = time.ticks_add(now, self.delay)
+        return self.stepsLeft > 0
+
+
+YIELD_MS = 10   # how often to let Bluetooth run
+
+async def moveTogether(steppers, feeder=None, feedStart=0, stopCheck=None, onStop=None,
+                       fDeg=180, fDelay=120, fDir=1):
+    t0 = time.ticks_ms()
+    lastYield = t0
+    feederStarted = False
+    stopped = False
+    while True:
+        if not stopped and stopCheck is not None and stopCheck():
+            stopped = True
+            if feeder is not None:
+                feeder.stepsLeft = 0      # cancel feed (or never start it)
+                feeder = None
+            if onStop is not None:
+                onStop()                  # ramp wheels down, once
+
+        now = time.ticks_us()
+        busy = False
+        for m in steppers:
+            if m.stepIfDue(now):
+                busy = True
+        if feeder is not None and not feederStarted:
+            late = feedStart > 0 and time.ticks_diff(time.ticks_ms(), t0) >= feedStart * 1000
+            if late or not busy:
+                feeder.prepare(fDeg, fDelay, fDir)
+                feederStarted = True
+        if feeder is not None:
+            if not feederStarted or feeder.stepIfDue(now):
+                busy = True
+        if not busy:
+            break
+
+        if time.ticks_diff(time.ticks_ms(), lastYield) >= YIELD_MS:
+            await asyncio.sleep_ms(0)
+            lastYield = time.ticks_ms()
+            
+    

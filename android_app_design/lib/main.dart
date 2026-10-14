@@ -13,11 +13,11 @@ const serviceUuid = "fe1dcbe3-4f5e-4e98-bcaf-8ab7731a731a";
 const charUuid    = "fe1dcbe3-4f5e-4e98-bcaf-8ab7731a731b";
 
 enum AppMode { grid, custom, random, seq, debug, settings }
-enum SequenceDirection { topToBottom, bottomToTop }
+enum SequenceDirection { topToBottom, bottomToTop, random }
 enum TimingMode { perShot, global }
 
 // ─────────────────────────────────────────────────────────────────
-// MODEL
+// MODELf
 // ─────────────────────────────────────────────────────────────────
 class MachineSettings {
   final String id;
@@ -33,7 +33,11 @@ class MachineSettings {
     required this.spin,
     this.freq = 7,
   });
-
+  MachineSettings copy() => MachineSettings(
+      id: id, name: name, speed: speed,
+      turret: turret, cowl: cowl, spin: spin, freq: freq,
+    );
+    
   @override
   bool operator == (Object o) =>
       identical(this, o) || (o is MachineSettings && id == o.id);
@@ -221,7 +225,7 @@ class MainPage extends StatefulWidget {
   State<MainPage> createState() => _MainPageState();
 }
 
-class _MainPageState extends State<MainPage> {
+class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
 
   // ── persistence ───────────────────────────────────────────────
   Future<void> _savePrefs() async {
@@ -321,9 +325,8 @@ class _MainPageState extends State<MainPage> {
 
     // Current custom selection
     final curId = p.getString('curCustomId') ?? 'new_mode';
-    curCustom = saved.firstWhere((s) => s.id == curId,
-        orElse: () => _newTpl);
-
+    curCustom = saved.firstWhere((s) => s.id == curId, orElse: () => _newTpl).copy();
+    //curCustom = saved.firstWhere((s) => s.id == curId,orElse: () => _newTpl);
     // Saved sequences
     final sqCount = p.getInt('savedSeqCount') ?? 0;
     savedSeqs.clear();
@@ -354,7 +357,11 @@ class _MainPageState extends State<MainPage> {
 
   AppMode mode = AppMode.grid;
 
+  bool _wasPaused = false;
+  bool _zeroDialogOpen = false;
+
   bool running   = false;
+  bool liveAim = false;
 
   bool clearGridFlash = false;
   bool clearRandFlash = false;
@@ -600,6 +607,7 @@ class _MainPageState extends State<MainPage> {
     "sa" : 0,
     "tr" : 0,
     "tc" : 0,
+    "la" : false,
     "ts" : false,
     "r" : false,
     "cc" : {
@@ -628,6 +636,7 @@ class _MainPageState extends State<MainPage> {
     if (priorSent["tc"] != topCol) map["tc"] = topCol; priorSent["tc"] = topCol;
     if (priorSent["ts"] != testShotFlash) map["ts"] = testShotFlash; priorSent["ts"] = testShotFlash;
     if (priorSent["r"] != running) map["r"] = running; priorSent["r"] = running;
+    if (priorSent["la"] != liveAim) map["la"] = liveAim; priorSent["la"] = liveAim;
     var s = priorSent["cc"]["s"] != curCustom.speed;
     var t = priorSent["cc"]["t"] != curCustom.turret;
     var c = priorSent["cc"]["c"] != curCustom.cowl;
@@ -655,25 +664,66 @@ class _MainPageState extends State<MainPage> {
 
 
 
-
-
-
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _newTpl = MachineSettings(
         id: 'new_mode', name: 'New mode',
         speed: 10, turret: 0, cowl: 0, spin: 0, freq: 7);
-    curCustom = _newTpl;
+    curCustom = _newTpl.copy();
     saved = [_newTpl];
     _loadPrefs().then((_) => setState(() {}));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showZeroWarning());
   }
+
+  void _showZeroWarning() {
+  _zeroDialogOpen = true;
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => PopScope(
+      canPop: false,
+      child: AlertDialog(
+        backgroundColor: T.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: T.red),
+        ),
+        title: Row(children: [
+          const Icon(Icons.warning_amber_rounded, color: T.red, size: 60),
+          const SizedBox(width: 8),
+          Text('STOP', style: tx(60, T.red, w: FontWeight.w700, ls: 2)),
+        ]),
+        content: Text('Have you ZEROED the COWL and TURRET?',
+            style: tx(30, T.textHi)),
+        actions: [
+          TextButton(
+            onPressed: () {_zeroDialogOpen = false;Navigator.pop(context);},
+            child: Text('YES', style: tx(45, T.green, w: FontWeight.w700, ls: 1)),
+          ),
+        ],
+      ),
+    ),
+  );
+}
 
   @override
   void dispose() {
     _ballTimer?.cancel();
     _delayTicker?.cancel();
     super.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _wasPaused = true;
+    } else if (state == AppLifecycleState.resumed && _wasPaused) {
+      _wasPaused = false;
+      if (!_zeroDialogOpen) _showZeroWarning();
+    }
   }
 
   bool get _startAllowed =>
@@ -907,8 +957,8 @@ class _MainPageState extends State<MainPage> {
       padding: const EdgeInsets.symmetric(horizontal: 10),
       child: Row(children: [
         btn('GRID', AppMode.grid),
-        btn('CUSTOM', AppMode.custom),
         btn('RANDOM', AppMode.random),
+        btn('CUSTOM', AppMode.custom),
         btn('SEQ', AppMode.seq),
       ]),
     );
@@ -1005,9 +1055,7 @@ class _MainPageState extends State<MainPage> {
             value: s,
             child: Text(s.name, style: tx(14, T.textHi)),
           )).toList(),
-          onChanged: (s) {
-            if (s != null) { _stopAll(); setState(() {curCustom = s; sendJson(compileInformation());}); }
-          },
+          onChanged: (s) {if (s != null) {_stopAll();setState(() {curCustom = s.copy();sendJson(compileInformation());});}},
         ),
       ),
       _customSliders(),
@@ -1024,6 +1072,10 @@ class _MainPageState extends State<MainPage> {
         }, accent: T.violet, accentBg: T.violetDim),
         if (curCustom.id != 'new_mode')
           _Pill('DELETE', true, _deleteMode, accent: T.red, accentBg: T.redDim),
+        _Pill(liveAim ? 'LIVE AIM: ON' : 'LIVE AIM: OFF', liveAim, () {
+          _stopAll();
+          setState(() { liveAim = !liveAim; sendJson(compileInformation()); });
+        }, accent: T.green, accentBg: T.greenDim),
       ]),
     ]),
   );
@@ -1433,6 +1485,7 @@ class _MainPageState extends State<MainPage> {
     return Row(children: [
       btn('1-8 | 8-1', SequenceDirection.topToBottom),
       btn('1-8 | 1-8', SequenceDirection.bottomToTop),
+      btn('RANDOM', SequenceDirection.random),
     ]);
   }
 
@@ -1631,7 +1684,11 @@ class _MainPageState extends State<MainPage> {
               cowl: curCustom.cowl, spin: curCustom.spin, freq: curCustom.freq,
             );
             saved.add(np);
+<<<<<<< Updated upstream
             curCustom = np;
+=======
+            curCustom = np.copy();
+>>>>>>> Stashed changes
             sendJson(compileInformation());
           });
           _savePrefs();
@@ -1646,7 +1703,14 @@ class _MainPageState extends State<MainPage> {
       _info('No Mode Selected', 'Use "Save New" to create a mode first.');
       return;
     }
-    setState(() {});
+    final target = saved.firstWhere((s) => s.id == curCustom.id);
+    setState(() {
+      target.speed  = curCustom.speed;
+      target.turret = curCustom.turret;
+      target.cowl   = curCustom.cowl;
+      target.spin   = curCustom.spin;
+      target.freq   = curCustom.freq;
+    });
     _savePrefs();
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('"${curCustom.name}" saved.', style: tx(12, Colors.white)),
@@ -1676,7 +1740,10 @@ class _MainPageState extends State<MainPage> {
             _info('Name In Use', '"$t" already exists.');
             return;
           }
-          setState(() {curCustom.name = t; sendJson(compileInformation());});
+          setState(() {
+            curCustom.name = t;saved.firstWhere((s) => s.id == curCustom.id).name = t;sendJson(compileInformation());
+          });
+          _savePrefs();
           Navigator.pop(context);
         }),
       ],
@@ -1736,7 +1803,7 @@ class _MainPageState extends State<MainPage> {
             seqList.removeWhere((s) => s.id == curCustom.id);
             saved.removeWhere((s) => s.id == curCustom.id);
             // Note: savedSeqs keep the id in modeIds — they'll show as [DELETED]
-            curCustom = _newTpl; sendJson(compileInformation());
+            curCustom = _newTpl.copy();
           });
           _savePrefs();
           Navigator.pop(context);
@@ -2229,12 +2296,29 @@ class _MainPageState extends State<MainPage> {
 
   List<MachineSettings> _effectiveSeq() {
     if (seqList.isEmpty) return [];
+<<<<<<< Updated upstream
     return seqDir == SequenceDirection.topToBottom
         ? List.from(seqList) : List.from(seqList.reversed);
   }
+=======
+    if (seqDir == SequenceDirection.random) return List<MachineSettings>.from(seqList);
+    final forward = List<MachineSettings>.from(seqList);
+    if (seqDir == SequenceDirection.topToBottom) {
+      // 1-8, 8-1 — forward then backward
+      final backward = List<MachineSettings>.from(seqList.reversed);
+      return [...forward, ...backward];
+    } else {
+      // 1-8, 1-8 — forward then forward again
+      return [...forward, ...forward];
+    }
+    }
+>>>>>>> Stashed changes
 
-  String _dirLabel(SequenceDirection d) => d == SequenceDirection.topToBottom
-      ? '1 → 8 | 8 → 1' : 'Bottom → Top';
+  String _dirLabel(SequenceDirection d) {
+    switch (d) {
+      case SequenceDirection.topToBottom: return '1 → 8 | 8 → 1';
+      case SequenceDirection.bottomToTop: return '1 → 8 | 1 → 8';
+      case SequenceDirection.random:      return 'Random';}}
 }
 
 // ─────────────────────────────────────────────────────────────────
